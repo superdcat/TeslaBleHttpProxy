@@ -49,9 +49,9 @@ func Capabilities(proxyRoutes func() []string) http.HandlerFunc {
 
 func capabilityFeatures() models.CapabilityFeatures {
 	return models.CapabilityFeatures{
-		StrictBodyValidation:      true,  // UC1003
-		BodyControllerStateQueued: true,  // UC1006
-		AuthRequired:              false, // UC1007: derived from the token config (guard AppConfig == nil in tests)
+		StrictBodyValidation:      true,                               // UC1003
+		BodyControllerStateQueued: true,                               // UC1006
+		AuthRequired:              config.CurrentAPIToken().Enabled(), // UC1007
 	}
 }
 

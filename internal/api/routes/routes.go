@@ -1,7 +1,7 @@
 package routes
 
 import (
-	"embed"
+	"io/fs"
 	"net/http"
 	"path"
 	"slices"
@@ -11,8 +11,10 @@ import (
 	"github.com/wimaha/TeslaBleHttpProxy/internal/api/handlers"
 )
 
-func SetupRoutes(static embed.FS, html embed.FS) *mux.Router {
+func SetupRoutes(static fs.FS, html fs.FS) *mux.Router {
 	router := mux.NewRouter()
+	// Optional API token (apiToken, UC1007): runs for the matched routes only.
+	router.Use(requireAPIToken)
 
 	// Define the endpoints
 	///api/1/vehicles/{vehicle_tag}/command/set_charging_amps

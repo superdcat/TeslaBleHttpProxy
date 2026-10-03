@@ -141,3 +141,31 @@ func TestCapabilitiesAnnouncedEndpointsAreServed(t *testing.T) {
 		t.Errorf("endpoint nope: reason %q, want %q", got, want)
 	}
 }
+
+func TestCapabilityFeaturesAuthRequired(t *testing.T) { // UC1007
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want string
+	}{
+		{"no configuration", nil, `"auth_required":false`},
+		{"no token", &config.Config{}, `"auth_required":false`},
+		{"blank token", &config.Config{APIToken: config.NewAPIToken("  ")}, `"auth_required":false`},
+		{"token set", &config.Config{APIToken: config.NewAPIToken("secret")}, `"auth_required":true`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			previous := config.AppConfig
+			t.Cleanup(func() { config.AppConfig = previous })
+			config.AppConfig = tt.cfg
+			t.Chdir(t.TempDir())
+			body := getCapabilities(t, "capabilities", "version").Body.String()
+			if !strings.Contains(body, tt.want) {
+				t.Errorf("body %s, want it to contain %s", body, tt.want)
+			}
+			if strings.Contains(body, "secret") {
+				t.Errorf("token leaked in %s", body)
+			}
+		})
+	}
+}

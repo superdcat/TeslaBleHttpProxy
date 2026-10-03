@@ -92,9 +92,10 @@ const Flavor = "superdcat"
 type Config struct {
 	LogLevel             string
 	HttpListenAddress    string
-	ScanTimeout          int // Seconds to scan for BLE devices
-	CacheMaxAge          int // Seconds for HTTP Cache-Control header max-age (used for body controller state responses). If set to 0, cache headers are disabled.
-	VehicleDataCacheTime int // Seconds to cache VehicleData endpoint responses in memory. Each endpoint is cached separately per VIN.
+	ScanTimeout          int      // Seconds to scan for BLE devices
+	CacheMaxAge          int      // Seconds for HTTP Cache-Control header max-age (used for body controller state responses). If set to 0, cache headers are disabled.
+	VehicleDataCacheTime int      // Seconds to cache VehicleData endpoint responses in memory. Each endpoint is cached separately per VIN.
+	APIToken             APIToken // Optional API token (apiToken, UC1007); disabled when empty.
 }
 
 var AppConfig *Config
@@ -148,12 +149,20 @@ func LoadConfig() *Config {
 	}
 	logging.Info("Env:", "vehicleDataCacheTime", vehicleDataCacheTimeInt)
 
+	rawAPIToken := os.Getenv("apiToken")
+	apiToken := NewAPIToken(rawAPIToken)
+	logging.Info("Env:", "apiToken", apiToken.String())
+	if rawAPIToken != "" && !apiToken.Enabled() {
+		logging.Warn("apiToken is blank: authentication stays disabled")
+	}
+
 	return &Config{
 		LogLevel:             envLogLevel,
 		HttpListenAddress:    addr,
 		CacheMaxAge:          cacheMaxAgeInt,
 		ScanTimeout:          scanTimeoutInt,
 		VehicleDataCacheTime: vehicleDataCacheTimeInt,
+		APIToken:             apiToken,
 	}
 }
 

@@ -11,6 +11,7 @@ The program stores the received requests in a queue and processes them one by on
   - [Build yourself](#build-yourself)
 - [Generate key for vehicle](#generate-key-for-vehicle)
 - [Setup EVCC](#setup-evcc)
+- [Authentication (optional, superdcat fork)](#authentication-optional-superdcat-fork)
 - [API](#api)
   - [Vehicle Commands](#vehicle-commands)
   - [Vehicle Data](#vehicle-data)
@@ -125,6 +126,28 @@ If you want to use this proxy only for commands, and not for vehicle data, you c
 ```
 
 (Hint for multiple vehicle support: https://github.com/wimaha/TeslaBleHttpProxy/issues/40)
+
+With the optional `apiToken` (see [Authentication](#authentication-optional-superdcat-fork)) the `tesla-ble` template stops working, because it has no parameter to send an `Authorization` header, and `commandProxy` is not compatible either. Leave `apiToken` unset if you use evcc.
+
+## Authentication (optional, superdcat fork)
+
+By default the proxy has no authentication: anyone who can reach its port can send commands to the vehicle. Set the environment variable `apiToken` to protect it (generate a token with `openssl rand -hex 32`; see [environment variables](docs/environment_variables.md#apitoken)). When it is empty or unset, nothing changes. A change needs a restart.
+
+With a token set:
+
+- `/api/1/...` and `/api/proxy/1/...` require `Authorization: Bearer <token>`, except `/api/proxy/1/version` and `/api/proxy/1/capabilities`, which stay open.
+- The pages (`/dashboard`, `/logs`), `/api/logs*` and the key routes (`/gen_keys`, `/remove_keys`, `/activate_key`, `/send_key`) require HTTP Basic authentication: any user name, the token as password. A browser asks for it.
+- `/` (redirect) and `/static/` stay open.
+- A refused request gets HTTP 401, the usual envelope with `"reason":"unauthorized"` and a `WWW-Authenticate` header. Each refusal is logged (method, route, client address; never the credentials).
+
+Examples (leading and trailing spaces of the token are ignored):
+
+```
+curl -H "Authorization: Bearer $TOKEN" http://IP:8080/api/1/vehicles/VIN/vehicle_data
+curl -u any:$TOKEN "http://IP:8080/api/logs"
+```
+
+Never put the token in a URL. The proxy speaks plain HTTP: use a reverse proxy with TLS if the network is not trusted.
 
 ## API
 
@@ -248,6 +271,8 @@ The route answers without a vehicle, without Bluetooth and without an installed 
 - `proxy_routes`: the proxy-specific routes under `/api/proxy/1/` (last path segment).
 - `features`: `strict_body_validation`, `body_controller_state_queued`, `auth_required`.
 - `key_role`: role of the active key (`owner` or `charging_manager`), or an empty string when no key is installed for it.
+
+`auth_required` is `true` when `apiToken` is set. The version and capabilities routes stay open with a token (`key_role` included), so that a client can discover the proxy before sending its token.
 
 The lists are sorted but must be read as sets (the order is not part of the contract). The wimaha and Lenart12 proxies answer 404 on this route.
 

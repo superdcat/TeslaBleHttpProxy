@@ -22,6 +22,10 @@ This is the number of seconds to cache VehicleData endpoint responses in memory.
 
 This is the address and port to listen for HTTP requests. (Default: :8080)
 
+## apiToken
+
+Optional API token (default: empty, no authentication). When set, `/api/1/...` and `/api/proxy/1/...` require `Authorization: Bearer <token>` (except `/api/proxy/1/version` and `/api/proxy/1/capabilities`), and the pages, `/api/logs*` and the key routes require HTTP Basic authentication with any user name and the token as password. A blank value leaves authentication disabled. Generate a token with `openssl rand -hex 32`. Never put it in a URL. The proxy has to be restarted to apply a change.
+
 # Example
 
 ## Docker compose
@@ -34,14 +38,17 @@ environment:
   - cacheMaxAge=10
   - vehicleDataCacheTime=60
   - httpListenAddress=:5687
+  - apiToken=${TESLA_PROXY_API_TOKEN}
 ```
 
-This will set the log level to debug, the scanTimeout to 5 seconds, the HTTP cache max age to 10 seconds, the VehicleData cache time to 60 seconds, and the HTTP listen address to :5687.
+Define `TESLA_PROXY_API_TOKEN` in your environment or `.env` file first (for example with the output of `openssl rand -hex 32`); never paste a token published in documentation.
+
+This will set the log level to debug, the scanTimeout to 5 seconds, the HTTP cache max age to 10 seconds, the VehicleData cache time to 60 seconds, the HTTP listen address to :5687, and the API token to the value of `TESLA_PROXY_API_TOKEN`.
 
 ## Command line
 
 You can also set the environment variables in the command line when starting the program. Example:
 
 ```
-logLevel=debug scanTimeout=5 cacheMaxAge=10 vehicleDataCacheTime=60 httpListenAddress=:5687 ./TeslaBleHttpProxy
+logLevel=debug scanTimeout=5 cacheMaxAge=10 vehicleDataCacheTime=60 httpListenAddress=:5687 apiToken="$TOKEN" ./TeslaBleHttpProxy
 ```
