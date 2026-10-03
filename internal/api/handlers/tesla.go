@@ -144,6 +144,10 @@ func Command(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Complete the validated body once (e.g. the id of add_charge_schedule), so that the retries
+	// of the queued command all replay the same body.
+	body = commands.PrepareCommandBody(command, body)
+
 	if wait {
 		ctx := r.Context()
 		drainBody(r)

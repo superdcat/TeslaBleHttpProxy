@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -197,6 +198,38 @@ func TestCommandRoute(t *testing.T) {
 			envelope(true, received, "window_control"),
 			[]queuedCommand{{"window_control", map[string]interface{}{"command": "close", "lat": "48.85", "lon": 2.35}, false}}},
 
+		// UC1014: charge schedules refused before queuing, whatever wait is; the id generated for a
+		// body without id is checked by TestCommandRouteGeneratesScheduleID.
+		{"schedule start_time abc", "add_charge_schedule", "", `{"start_time":"abc"}`, nil, 503,
+			envelope(false, "invalid request body: days_of_week missing", "add_charge_schedule"), nil},
+		{"schedule start_time abc wait=false", "add_charge_schedule", "?wait=false", `{"start_time":"abc"}`, nil, 503,
+			envelope(false, "invalid request body: days_of_week missing", "add_charge_schedule"), nil},
+		{"schedule full body with start_time abc wait=true", "add_charge_schedule", "?wait=true",
+			`{"days_of_week":"mon","start_time":"abc","enabled":true,"lat":1,"lon":2}`, nil, 503,
+			envelope(false, "invalid request body: start_time is not a valid integer", "add_charge_schedule"), nil},
+		{"schedule unknown day", "add_charge_schedule", "", `{"days_of_week":"funday","start_time":60,"enabled":true,"lat":1,"lon":2}`, nil, 503,
+			envelope(false, "invalid request body: days_of_week contains an unknown day name", "add_charge_schedule"), nil},
+		{"schedule with id queued unchanged", "add_charge_schedule", "",
+			`{"id":42,"days_of_week":"All","start_time":60,"enabled":true,"lat":1,"lon":2}`, nil, 200,
+			envelope(true, received, "add_charge_schedule"),
+			[]queuedCommand{{"add_charge_schedule", map[string]interface{}{"id": 42.0, "days_of_week": "All", "start_time": 60.0, "enabled": true, "lat": 1.0, "lon": 2.0}, false}}},
+		{"remove empty object", "remove_charge_schedule", "", `{}`, nil, 503,
+			envelope(false, "invalid request body: id missing", "remove_charge_schedule"), nil},
+		{"remove empty object wait=true", "remove_charge_schedule", "?wait=true", `{}`, nil, 503,
+			envelope(false, "invalid request body: id missing", "remove_charge_schedule"), nil},
+		{"remove id 0", "remove_charge_schedule", "", `{"id":0}`, nil, 503,
+			envelope(false, "invalid request body: id must be a positive integer", "remove_charge_schedule"), nil},
+		{"remove id as string queued unchanged", "remove_charge_schedule", "", `{"id":"7"}`, nil, 200,
+			envelope(true, received, "remove_charge_schedule"),
+			[]queuedCommand{{"remove_charge_schedule", map[string]interface{}{"id": "7"}, false}}},
+		{"scheduled charging enable without time", "set_scheduled_charging", "", `{"enable":true}`, nil, 503,
+			envelope(false, "invalid request body: time missing", "set_scheduled_charging"), nil},
+		{"scheduled charging time 1440", "set_scheduled_charging", "?wait=true", `{"enable":true,"time":1440}`, nil, 503,
+			envelope(false, "invalid request body: time must be an integer between 0 and 1439", "set_scheduled_charging"), nil},
+		{"scheduled charging disable queued unchanged", "set_scheduled_charging", "", `{"enable":false}`, nil, 200,
+			envelope(true, received, "set_scheduled_charging"),
+			[]queuedCommand{{"set_scheduled_charging", map[string]interface{}{"enable": false}, false}}},
+
 		// AC7: unchanged 2.3.0 answers.
 		{"unsupported command", "x", "", `{}`, nil, 503, envelope(false, `The command \"x\" is not supported.`, "x"), nil},
 		{"wait=true success", "set_charging_amps", "?wait=true", `{"charging_amps":16}`, succeed, 200, envelope(true, processed, "set_charging_amps"),
@@ -244,5 +277,42 @@ func TestCommandRouteWithoutKeyKeepsReason(t *testing.T) {
 	}
 	if len(*queued) != 0 {
 		t.Errorf("queued = %+v, want nothing", *queued)
+	}
+}
+
+// UC1014 AC3: a body without id (absent, null or 0) is queued with a generated decimal id, once,
+// the other keys unchanged, with and without wait; the client's JSON is not modified.
+func TestCommandRouteGeneratesScheduleID(t *testing.T) {
+	const rest = `"days_of_week":"mon,wed,fri","start_time":480,"end_time":1020,"enabled":true,"lat":48.8566,"lon":2.3522`
+	for _, idPart := range []string{"", `"id":null,`, `"id":0,`} {
+		for _, query := range []string{"", "?wait=false", "?wait=true"} {
+			t.Run(idPart+query, func(t *testing.T) {
+				queued := stubQueue(t, func(r *models.ApiResponse) { r.Result = true })
+				rec := postCommand(t, "add_charge_schedule", query, "{"+idPart+rest+"}")
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+				}
+				if len(*queued) != 1 {
+					t.Fatalf("queued = %+v, want one command", *queued)
+				}
+				if (*queued)[0].wait != (query == "?wait=true") {
+					t.Errorf("queued wait = %v, want %v", (*queued)[0].wait, query == "?wait=true")
+				}
+				body := (*queued)[0].body
+				id, ok := body["id"].(string)
+				if !ok {
+					t.Fatalf("queued id = %#v, want a decimal string", body["id"])
+				}
+				if n, err := strconv.ParseUint(id, 10, 64); err != nil || n < 1 {
+					t.Errorf("queued id = %q, want a positive decimal integer", id)
+				}
+				delete(body, "id")
+				want := map[string]interface{}{"days_of_week": "mon,wed,fri", "start_time": 480.0, "end_time": 1020.0,
+					"enabled": true, "lat": 48.8566, "lon": 2.3522}
+				if !reflect.DeepEqual(body, want) {
+					t.Errorf("queued body (without id) = %v, want %v", body, want)
+				}
+			})
+		}
 	}
 }

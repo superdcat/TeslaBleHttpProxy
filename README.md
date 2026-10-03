@@ -200,6 +200,9 @@ The program uses the same interfaces as the Tesla [Fleet API](https://developer.
 - remote_steering_wheel_heater_request (superdcat fork)
 - actuate_trunk (superdcat fork)
 - window_control (superdcat fork)
+- add_charge_schedule (superdcat fork)
+- remove_charge_schedule (superdcat fork)
+- set_scheduled_charging (superdcat fork)
 
 By default, the program will return immediately after sending the command to the vehicle. If you want to wait for the command to complete, you can set the `wait` parameter to `true`.
 
@@ -285,6 +288,21 @@ Vent or close the windows (superdcat fork):
 `http://localhost:8080/api/1/vehicles/{VIN}/command/window_control` with body `{"command": "vent"}` or `{"command": "close"}`
 
 `command` is required. `lat` and `lon` (degrees, `lat` -90 to 90, `lon` -180 to 180) are accepted for compatibility with the Fleet API and validated, but **not sent** to the vehicle, which needs no position over BLE: omit them. A request body is logged by the proxy, so avoid sending coordinates. These two commands wake the vehicle up like the others, are expected to need the Owner role (a Charging Manager key should be refused by the vehicle), and open the vehicle to anyone who can reach the proxy: set an `apiToken`. Values of `which_trunk` and `command` are case-insensitive and surrounding spaces are ignored; anything else is refused with HTTP 503.
+
+Add a charge schedule (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/add_charge_schedule` with body `{"id": 1767225600, "days_of_week": "mon,wed,fri", "start_time": 1380, "end_time": 360, "enabled": true, "lat": 48.8566, "lon": 2.3522}`
+
+Remove a charge schedule (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/remove_charge_schedule` with body `{"id": 1767225600}`
+
+Set the scheduled charging (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/set_scheduled_charging` with body `{"enable": true, "time": 120}`
+
+`add_charge_schedule` follows the Fleet API. `days_of_week` is required: a comma-separated list of days (`mon,wed,fri`, `monday`, `tue`/`tues`, `thu`/`thurs`; case-insensitive, spaces around a name ignored; `All` and `Weekdays` can be mixed in) or a bitmask from 1 to 127 (Sunday is 1, Monday 2, ... Saturday 64). `start_time` and `end_time` are minutes after midnight (0 to 1439, the vehicle's local time); an end before the start means the next day. `start_enabled` and `end_enabled` are optional and default to the presence of the matching time; at least one must be true. `one_time` is optional (false). `enabled`, `lat` and `lon` are required: the coordinates (-90 to 90, -180 to 180) are sent to the vehicle and set the location of the schedule. `name` is not supported and is ignored. Numbers and booleans can be sent as strings; a wrong type, an unknown day or an out-of-range value is refused with HTTP 503 before the command is queued, whatever `wait` is. Compared with the official Tesla proxy, which leaves the validation to the vehicle, a missing `enabled`, `lat` or `lon`, a time out of range and two switches off are refused.
+
+`id` identifies the schedule (an existing `id` is updated, not duplicated) and is optional. If it is absent, `null` or 0, the proxy generates one when the command is queued (the Unix time in seconds, one more if two are generated in the same second): the retries of the command reuse it. It is **not returned** in the response: it is written in the logs ("Generated charge schedule id", "Executing command"). **Send your own `id`** (for example the Unix time: a JSON number up to 9007199254740991, or a decimal string up to 18446744073709551615), keep it, and use it to remove the schedule; a client that resends a request without `id` after a lost answer creates a second schedule. Reading the existing schedules is not available yet.
+
+`remove_charge_schedule` requires `id` (1 or more). `set_scheduled_charging` requires `enable`; `time` (0 to 1439, minutes after midnight) is required when `enable` is true. Tesla recommends against `set_scheduled_charging` since firmware 2024.26 (prefer `add_charge_schedule`); the vehicle may accept it without effect. These commands wake the vehicle up like the others and are expected to need the Charging Manager or Owner role (to be confirmed on a vehicle). The proxy **logs the request body in clear text, coordinates included** (logs and `/api/logs`, which is open when no `apiToken` is set): set an `apiToken`.
 
 ### Vehicle Data
 

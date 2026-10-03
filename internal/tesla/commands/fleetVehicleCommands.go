@@ -9,7 +9,8 @@
 // wimaha 2.3.0 error messages, validation without mutating the body, explicit Fleet seat
 // tables (Lenart12 shifted the seat heater by one), vehicle behind an interface for tests.
 // set_temps follows the contract of wimaha/TeslaBleHttpProxy PR #162; actuate_trunk follows
-// the contract of wimaha PR #162 (rear not retried).
+// the contract of wimaha PR #162 (rear not retried); add_charge_schedule follows the contract of
+// wimaha PR #153 (strictly typed, id generated once when queued).
 
 package commands
 
@@ -21,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/teslamotors/vehicle-command/pkg/vehicle"
 	"github.com/wimaha/TeslaBleHttpProxy/internal/logging"
@@ -60,6 +62,9 @@ type vehicleCommander interface {
 	ActuateTrunk(ctx context.Context) error
 	VentWindows(ctx context.Context) error
 	CloseWindows(ctx context.Context) error
+	AddChargeSchedule(ctx context.Context, schedule *vehicle.ChargeSchedule) error
+	RemoveChargeSchedule(ctx context.Context, id uint64) error
+	ScheduleCharging(ctx context.Context, enabled bool, timeAfterMidnight time.Duration) error
 }
 
 // Bounds of the cabin temperature setpoints, in degrees Celsius, inclusive (wimaha PR #162).
@@ -150,6 +155,9 @@ type commandHandler struct {
 	// notRetried, when set and true for the body, reports a vehicle error without retry: the action
 	// toggles a state (actuate_trunk rear), a retry after a lost reply would undo it (wimaha PR #162).
 	notRetried func(args commandArgs) bool
+	// prepare completes the body once, when the command is queued (after validate, before the
+	// retries): it returns a copy and never modifies args. Optional; see PrepareCommandBody.
+	prepare func(args commandArgs) commandArgs
 }
 
 var fleetVehicleCommands = map[string]commandHandler{
@@ -520,6 +528,53 @@ var fleetVehicleCommands = map[string]commandHandler{
 			return nil
 		},
 	},
+
+	// UC1014: charge schedules (add_charge_schedule and set_scheduled_charging ported from Lenart12,
+	// adapted; contract of wimaha PR #153, strictly typed; remove_charge_schedule written for the fork).
+	"add_charge_schedule": {
+		validate: func(args commandArgs) error {
+			_, err := args.chargeSchedule()
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			schedule, _ := args.chargeSchedule() // validated by run
+			if schedule.GetId() == 0 {
+				// Invariant: handlers.Command always passes the body through PrepareCommandBody.
+				return errors.New("charge schedule id was not prepared")
+			}
+			if err := car.AddChargeSchedule(ctx, schedule); err != nil {
+				return fmt.Errorf("failed to add charge schedule %d: %w", schedule.GetId(), err)
+			}
+			return nil
+		},
+		prepare: prepareChargeSchedule,
+	},
+	"remove_charge_schedule": {
+		validate: func(args commandArgs) error {
+			_, err := args.scheduleIDArg("id")
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			id, _ := args.scheduleIDArg("id") // validated by run
+			if err := car.RemoveChargeSchedule(ctx, id); err != nil {
+				return fmt.Errorf("failed to remove charge schedule %d: %w", id, err)
+			}
+			return nil
+		},
+	},
+	"set_scheduled_charging": {
+		validate: func(args commandArgs) error {
+			_, _, err := args.scheduledCharging()
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			enable, minutes, _ := args.scheduledCharging() // validated by run
+			if err := car.ScheduleCharging(ctx, enable, time.Duration(minutes)*time.Minute); err != nil {
+				return fmt.Errorf("failed to set scheduled charging: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // IsSupportedCommand reports whether name is accepted on the command route.
@@ -549,6 +604,18 @@ func ValidateCommandBody(name string, body map[string]interface{}) error {
 		return nil
 	}
 	return handler.validate(commandArgs(body))
+}
+
+// PrepareCommandBody completes the validated body of a registry command once, when it is queued,
+// so that the retries of a vehicle error all replay the same body (add_charge_schedule: the
+// generated id). It returns a copy when it completes the body, otherwise body itself; commands
+// without prepare and commands outside the registry get body back.
+func PrepareCommandBody(name string, body map[string]interface{}) map[string]interface{} {
+	handler, ok := fleetVehicleCommands[name]
+	if !ok || handler.prepare == nil {
+		return body
+	}
+	return handler.prepare(commandArgs(body))
 }
 
 // run validates the body again (internal callers may queue commands), executes the command and
@@ -746,7 +813,26 @@ func (args commandArgs) optCoordinateArg(key string, limit int) error {
 	if err != nil || !present {
 		return err
 	}
-	if value < -float64(limit) || value > float64(limit) {
+	return checkCoordinate(key, value, limit)
+}
+
+// coordinateArg reads a required number (optFloatArg) that must lie in [-limit, limit].
+func (args commandArgs) coordinateArg(key string, limit int) (float64, error) {
+	value, present, err := args.optFloatArg(key)
+	if err != nil {
+		return 0, err
+	}
+	if !present {
+		return 0, invalidBodyf("%s missing", key)
+	}
+	if err := checkCoordinate(key, value, limit); err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func checkCoordinate(key string, value float64, limit int) error {
+	if math.IsNaN(value) || value < -float64(limit) || value > float64(limit) {
 		return invalidBodyf("%s must be between -%d and %d degrees", key, limit, limit)
 	}
 	return nil

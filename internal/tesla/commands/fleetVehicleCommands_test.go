@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/teslamotors/vehicle-command/pkg/protocol"
 	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
@@ -105,6 +106,19 @@ func (f *fakeCar) ActuateTrunk(context.Context) error { return f.record("Actuate
 func (f *fakeCar) VentWindows(context.Context) error  { return f.record("VentWindows") }
 func (f *fakeCar) CloseWindows(context.Context) error { return f.record("CloseWindows") }
 
+// AddChargeSchedule records every field through the protobuf getters.
+func (f *fakeCar) AddChargeSchedule(_ context.Context, s *vehicle.ChargeSchedule) error {
+	return f.record(fmt.Sprintf("AddChargeSchedule(id=%d,days=%07b,start=%t/%d,end=%t/%d,one_time=%t,enabled=%t,lat=%g,lon=%g,name=%q)",
+		s.GetId(), s.GetDaysOfWeek(), s.GetStartEnabled(), s.GetStartTime(), s.GetEndEnabled(), s.GetEndTime(),
+		s.GetOneTime(), s.GetEnabled(), s.GetLatitude(), s.GetLongitude(), s.GetName()))
+}
+func (f *fakeCar) RemoveChargeSchedule(_ context.Context, id uint64) error {
+	return f.record(fmt.Sprintf("RemoveChargeSchedule(%d)", id))
+}
+func (f *fakeCar) ScheduleCharging(_ context.Context, enabled bool, after time.Duration) error {
+	return f.record(fmt.Sprintf("ScheduleCharging(%t,%s)", enabled, after))
+}
+
 // sdkSeatName names an SDK seat constant by hand (the SDK has no String()).
 func sdkSeatName(seat vehicle.SeatPosition) string {
 	switch seat {
@@ -197,12 +211,7 @@ func TestSupportedCommandsKeep230Route(t *testing.T) {
 // (ValidateCommandBody) and again at execution (run), without vehicle or BLE adapter.
 func TestCommandBodies(t *testing.T) {
 	const missingAmps = "invalid request body: charging_amps missing"
-	tests := []struct {
-		command string
-		body    string // JSON object; "" = no body
-		call    string // SDK call expected for a valid body
-		reason  string // error expected for an invalid body
-	}{
+	tests := []bodyCase{
 		// Commands without body: any body is ignored, as in 2.3.0.
 		{"auto_conditioning_start", "", "ClimateOn", ""},
 		{"auto_conditioning_start", `{"foo":1}`, "ClimateOn", ""},
@@ -517,11 +526,13 @@ func TestCommandBodies(t *testing.T) {
 		{"window_control", `{"command":"vent","lat":true}`, "", "invalid request body: lat must be a number or a numeric string"},
 		{"window_control", `{"command":"vent","lon":"1e999"}`, "", "invalid request body: lon is out of range"},
 	}
+	tests = append(tests, scheduleBodyCases...)
 
 	covered := map[string]bool{}
 	for _, tt := range tests {
 		covered[tt.command] = true
 		t.Run(tt.command+" "+tt.body, func(t *testing.T) {
+			freezeScheduleIDs(t, frozenScheduleUnix)
 			body := decodeBody(t, tt.body)
 
 			before := maps.Clone(body) // values are scalars: a shallow copy is enough
@@ -529,8 +540,16 @@ func TestCommandBodies(t *testing.T) {
 			if !reflect.DeepEqual(before, body) {
 				t.Errorf("ValidateCommandBody modified the body: %v, was %v", body, before)
 			}
+			// As handlers.Command: the validated body is completed once, then run replays it.
+			queued := body
+			if validateErr == nil {
+				queued = PrepareCommandBody(tt.command, body)
+				if !reflect.DeepEqual(before, body) {
+					t.Errorf("PrepareCommandBody modified the body: %v, was %v", body, before)
+				}
+			}
 			car := &fakeCar{}
-			retry, runErr := fleetVehicleCommands[tt.command].run(context.Background(), car, body)
+			retry, runErr := fleetVehicleCommands[tt.command].run(context.Background(), car, queued)
 			if !reflect.DeepEqual(before, body) {
 				t.Errorf("run modified the body: %v, was %v", body, before)
 			}
@@ -620,6 +639,9 @@ func TestAddedCommandsVehicleErrors(t *testing.T) {
 		{"actuate_trunk", `{"which_trunk":"front"}`, "failed to open frunk: " + vehicleFault},
 		{"window_control", `{"command":"vent"}`, "failed to vent windows: " + vehicleFault},
 		{"window_control", `{"command":"close","lat":1,"lon":2}`, "failed to close windows: " + vehicleFault},
+		{"add_charge_schedule", `{"id":5,"days_of_week":"all","start_time":60,"enabled":true,"lat":1,"lon":2}`, "failed to add charge schedule 5: " + vehicleFault},
+		{"remove_charge_schedule", `{"id":"9"}`, "failed to remove charge schedule 9: " + vehicleFault},
+		{"set_scheduled_charging", `{"enable":true,"time":60}`, "failed to set scheduled charging: " + vehicleFault},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command+" "+tt.body, func(t *testing.T) { assertVehicleError(t, tt.command, tt.body, tt.want) })
@@ -874,10 +896,11 @@ func TestFleetCommandNamesFloor(t *testing.T) {
 		"set_climate_keeper_mode", "set_cabin_overheat_protection", "set_cop_temp", "set_bioweapon_mode",
 		"remote_seat_heater_request", "remote_seat_cooler_request", "remote_auto_seat_climate_request", "remote_steering_wheel_heater_request",
 		"actuate_trunk", "window_control",
+		"add_charge_schedule", "remove_charge_schedule", "set_scheduled_charging",
 	}
 	names := FleetCommandNames()
-	if len(names) < 26 {
-		t.Errorf("FleetCommandNames() has %d names, want at least 26", len(names))
+	if len(names) < 29 {
+		t.Errorf("FleetCommandNames() has %d names, want at least 29", len(names))
 	}
 	for _, name := range floor {
 		if !slices.Contains(names, name) {
