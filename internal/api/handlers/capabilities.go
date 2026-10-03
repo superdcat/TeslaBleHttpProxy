@@ -50,7 +50,7 @@ func Capabilities(proxyRoutes func() []string) http.HandlerFunc {
 func capabilityFeatures() models.CapabilityFeatures {
 	return models.CapabilityFeatures{
 		StrictBodyValidation:      true,  // UC1003
-		BodyControllerStateQueued: false, // UC1006: true once BodyControllerState goes through the BLE queue
+		BodyControllerStateQueued: true,  // UC1006
 		AuthRequired:              false, // UC1007: derived from the token config (guard AppConfig == nil in tests)
 	}
 }

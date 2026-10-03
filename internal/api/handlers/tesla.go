@@ -348,6 +348,13 @@ func VehicleData(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// bodyControllerStateTimeout bounds a body_controller_state request, waiting in the BLE queue
+// included, as the 15 s of wimaha 2.3.0 (replaced in tests).
+var bodyControllerStateTimeout = 15 * time.Second
+
+// BodyControllerState serves GET /api/1/vehicles/{vin}/body_controller_state through the BLE
+// queue (VCSEC domain, never wakes the vehicle): it waits for the command in progress and reuses
+// its connection for the same VIN.
 func BodyControllerState(w http.ResponseWriter, r *http.Request) {
 	logRequest(r, "BodyControllerState")
 	params := mux.Vars(r)
@@ -355,7 +362,7 @@ func BodyControllerState(w http.ResponseWriter, r *http.Request) {
 
 	var response models.Response
 	response.Vin = vin
-	response.Command = "body-controller-state"
+	response.Command = commands.BodyControllerStateCommand
 
 	defer commonDefer(w, &response)
 
@@ -363,46 +370,31 @@ func BodyControllerState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var apiResponse models.ApiResponse
-
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	apiResponse.Ctx = ctx
+	ctx, cancel := context.WithTimeout(r.Context(), bodyControllerStateTimeout)
 	defer cancel()
-	cmd := &commands.Command{
-		Command:  "body-controller-state",
-		Domain:   commands.Domain.VCSEC,
-		Vin:      vin,
-		Response: &apiResponse,
-	}
-	conn, car, _, err := control.BleControlInstance.TryConnectToVehicle(ctx, cmd)
+	drainBody(r)
+	apiResponse := models.NewApiResponse(ctx)
+	err := enqueueCommand(ctx, commands.BodyControllerStateCommand, vin, nil, apiResponse, false)
 	if err == nil {
-		//Successful
-		defer conn.Close()
-		//defer log.Debug("close connection (A)")
-		defer car.Disconnect()
-		//defer log.Debug("disconnect vehicle (A)")
-
-		_, err, _ := control.BleControlInstance.ExecuteCommand(car, cmd, context.Background())
-		if err != nil {
-			response.Result = false
-			response.Reason = err.Error()
-			return
-		}
-
-		SetCacheControl(w, config.AppConfig.CacheMaxAge)
-
-		if apiResponse.Result {
-			response.Result = true
-			response.Reason = "The request was successfully processed."
-			response.Response = apiResponse.Response
-		} else {
-			response.Result = false
-			response.Reason = apiResponse.Error
-		}
-	} else {
+		err = waitForCommand(ctx, apiResponse)
+	}
+	if err != nil {
+		// Queue busy beyond the deadline, or the client hung up.
+		logging.Debug("Stopped waiting for body controller state", "Reason", err)
 		response.Result = false
 		response.Reason = err.Error()
+		return
 	}
+
+	if !apiResponse.Result {
+		response.Result = false
+		response.Reason = apiResponse.Error
+		return
+	}
+	SetCacheControl(w, config.AppConfig.CacheMaxAge)
+	response.Result = true
+	response.Reason = "The request was successfully processed."
+	response.Response = apiResponse.Response
 }
 
 func logRequest(r *http.Request, handler string) {

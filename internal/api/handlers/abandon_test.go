@@ -43,6 +43,7 @@ func commandRouter() *mux.Router {
 	router := mux.NewRouter()
 	router.HandleFunc("/api/1/vehicles/{vin}/command/{command}", Command).Methods("POST")
 	router.HandleFunc("/api/1/vehicles/{vin}/vehicle_data", VehicleData).Methods("GET")
+	router.HandleFunc("/api/1/vehicles/{vin}/body_controller_state", BodyControllerState).Methods("GET")
 	return router
 }
 
@@ -69,6 +70,8 @@ func TestWaitingHandlersStopWhenClientHangsUp(t *testing.T) {
 			envelope(false, "context canceled", "door_unlock")},
 		{"vehicle_data", http.MethodGet, "/api/1/vehicles/" + testVIN + "/vehicle_data",
 			envelope(false, "context canceled", "vehicle_data")},
+		{"body_controller_state", http.MethodGet, "/api/1/vehicles/" + testVIN + "/body_controller_state",
+			envelope(false, "context canceled", "body-controller-state")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

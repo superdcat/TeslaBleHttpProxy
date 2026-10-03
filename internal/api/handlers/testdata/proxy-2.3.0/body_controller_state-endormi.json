@@ -1,0 +1,37 @@
+{
+  "cas": "body_controller_state : vehicule endormi, verrouille",
+  "requete": {
+    "methode": "GET",
+    "chemin": "/api/1/vehicles/TESLABLE000000001/body_controller_state",
+    "corps": null
+  },
+  "reponse": {
+    "statut_http": 200,
+    "corps": {
+      "response": {
+        "result": true,
+        "reason": "The request was successfully processed.",
+        "vin": "TESLABLE000000001",
+        "command": "body-controller-state",
+        "response": {
+          "closure_statuses": {
+            "front_driver_door": "CLOSURESTATE_CLOSED",
+            "front_passenger_door": "CLOSURESTATE_CLOSED",
+            "rear_driver_door": "CLOSURESTATE_CLOSED",
+            "rear_passenger_door": "CLOSURESTATE_CLOSED",
+            "rear_trunk": "CLOSURESTATE_CLOSED",
+            "front_trunk": "CLOSURESTATE_CLOSED",
+            "charge_port": "CLOSURESTATE_CLOSED",
+            "tonneau": "CLOSURESTATE_CLOSED"
+          },
+          "detailed_closure_status": {
+            "tonneau_percent_open": 0
+          },
+          "user_presence": "VEHICLE_USER_PRESENCE_NOT_PRESENT",
+          "vehicle_lock_state": "VEHICLELOCKSTATE_LOCKED",
+          "vehicle_sleep_status": "VEHICLE_SLEEP_STATUS_ASLEEP"
+        }
+      }
+    }
+  }
+}

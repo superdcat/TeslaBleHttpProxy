@@ -43,6 +43,11 @@ func convertVehicleData(endpoint string, data *carserver.VehicleData) (interface
 	return nil, false
 }
 
+// BodyControllerStateJSON is the response of the body_controller_state route (snake_case since 2.1.1).
+func BodyControllerStateJSON(vs *vcsec.VehicleStatus) (json.RawMessage, error) {
+	return json.Marshal(models.VehicleStatusFromBle(vs))
+}
+
 func (command *Command) Send(ctx context.Context, car *vehicle.Vehicle) (shouldRetry bool, err error) {
 	if handler, ok := fleetVehicleCommands[command.Command]; ok {
 		return handler.run(ctx, car, command.Body)
@@ -172,11 +177,13 @@ func (command *Command) Send(ctx context.Context, car *vehicle.Vehicle) (shouldR
 		if err != nil {
 			return true, fmt.Errorf("failed to get body controller state: %s", err)
 		}
-		vsJson, err := json.Marshal(models.VehicleStatusFromBle(vs))
+		vsJson, err := BodyControllerStateJSON(vs)
 		if err != nil {
 			return true, fmt.Errorf("failed to marshal body-controller-state: %s", err)
 		}
-		command.Response.Response = vsJson
+		if command.Response != nil {
+			command.Response.Response = vsJson
+		}
 	default:
 		return false, fmt.Errorf("unrecognized command: %s", command.Command)
 	}

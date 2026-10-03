@@ -61,7 +61,7 @@ func TestCapabilitiesEnvelope(t *testing.T) {
 		`"commands":` + mustJSON(t, commands.FleetCommandNames()) + `,` +
 		`"vehicle_data_endpoints":` + mustJSON(t, commands.VehicleDataEndpointNames()) + `,` +
 		`"proxy_routes":["capabilities","version"],` +
-		`"features":{"strict_body_validation":true,"body_controller_state_queued":false,"auth_required":false},` +
+		`"features":{"strict_body_validation":true,"body_controller_state_queued":true,"auth_required":false},` +
 		`"key_role":""}}}` + "\n"
 	if got := rec.Body.String(); got != want {
 		t.Errorf("body mismatch\n got: %s\nwant: %s", got, want)

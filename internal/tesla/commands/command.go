@@ -20,6 +20,21 @@ var Domain = struct {
 	Infotainment: "infotainment",
 }
 
+// BodyControllerStateCommand is the queued command of GET /api/1/vehicles/{vin}/body_controller_state.
+// It is not accepted on the command route (IsSupportedCommand).
+const BodyControllerStateCommand = "body-controller-state"
+
+// CommandDomain returns the domain a queued command needs: VCSEC for body_controller_state, which
+// never wakes the vehicle; None for the others, whose connection starts the infotainment session
+// and wakes the vehicle as in wimaha 2.3.0.
+// Adapted from Lenart12/TeslaBleHttpProxy (Command.Domain, commit 94d1fd8).
+func CommandDomain(command string) DomainType {
+	if command == BodyControllerStateCommand {
+		return Domain.VCSEC
+	}
+	return Domain.None
+}
+
 type Command struct {
 	Command    string
 	Domain     DomainType

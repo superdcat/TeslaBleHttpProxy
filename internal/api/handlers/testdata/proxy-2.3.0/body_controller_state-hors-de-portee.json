@@ -1,0 +1,19 @@
+{
+  "cas": "body_controller_state : vehicule hors de portee BLE",
+  "requete": {
+    "methode": "GET",
+    "chemin": "/api/1/vehicles/TESLABLE000000001/body_controller_state",
+    "corps": null
+  },
+  "reponse": {
+    "statut_http": 503,
+    "corps": {
+      "response": {
+        "result": false,
+        "reason": "Vehicle is not in range: ble: failed to scan for TESLABLE000000001: context deadline exceeded",
+        "vin": "TESLABLE000000001",
+        "command": "body-controller-state"
+      }
+    }
+  }
+}

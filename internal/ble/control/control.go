@@ -110,6 +110,7 @@ func (bc *BleControl) PushCommand(ctx context.Context, command string, vin strin
 	select {
 	case bc.commandStack <- commands.Command{
 		Command:    command,
+		Domain:     commands.CommandDomain(command),
 		Vin:        vin,
 		Body:       body,
 		Response:   response,
@@ -152,7 +153,7 @@ func (bc *BleControl) connectToVehicleAndOperateConnection(firstCommand *command
 	//defer log.Debug("connecting to Vehicle done")
 
 	var sleep = 3 * time.Second
-	var retryCount = 3
+	var retryCount = connectionAttempts(firstCommand)
 	var lastErr error
 
 	commandError := func(err error) *commands.Command {
@@ -215,7 +216,9 @@ func (bc *BleControl) connectToVehicleAndOperateConnection(firstCommand *command
 			lastErr = err
 		}
 	}
-	logging.Error(fmt.Sprintf("Stop retrying after %d attempts", retryCount), "Error", lastErr)
+	if retryCount > 1 {
+		logging.Error(fmt.Sprintf("Stop retrying after %d attempts", retryCount), "Error", lastErr)
+	}
 	return commandError(lastErr)
 }
 
@@ -326,7 +329,7 @@ func (bc *BleControl) TryConnectToVehicle(ctx context.Context, firstCommand *com
 		// wake_up command can execute with just VCSEC, but we still need Infotainment for other commands
 		isWakeUpCommand := firstCommand.Command == "wake_up"
 
-		if firstCommand.Domain != commands.Domain.VCSEC || isWakeUpCommand {
+		if !vcsecOnlyConnection(firstCommand) {
 			// For wake_up, skip sleep check and Infotainment setup (it only needs VCSEC)
 			if isWakeUpCommand {
 				logging.Debug("Wake_up command detected, VCSEC session is sufficient")
@@ -435,6 +438,13 @@ func (bc *BleControl) operateConnection(car *vehicle.Vehicle, firstCommand *comm
 	cmd, err, _ := bc.ExecuteCommand(car, firstCommand, connectionCtx)
 	if err != nil {
 		return cmd
+	}
+
+	// Closed at once, as the 2.3.0 handler did: the next commands may need the infotainment
+	// session, which only TryConnectToVehicle starts.
+	if vcsecOnlyConnection(firstCommand) {
+		logging.Debug("VCSEC only connection, closing it", "Command", firstCommand.Command)
+		return nil
 	}
 
 	// If wake_up command executed successfully, upgrade session to include Infotainment

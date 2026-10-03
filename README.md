@@ -204,7 +204,7 @@ This is recommended if you want to receive data frequently, since it will reduce
 
 ### Body Controller State
 
-The body controller state is fetched from the vehicle and returnes the state of the body controller. The request does not wake up the vehicle. The following information is returned:
+The body controller state is fetched from the vehicle and returnes the state of the body controller. The request does not wake up the vehicle. In this fork it goes through the BLE command queue (VCSEC domain): it waits for the command in progress and reuses its connection for the same VIN, and answers `503` with `context deadline exceeded` when the queue stays busy for more than 15 seconds (`features.body_controller_state_queued` in the capabilities). The following information is returned:
 
 - `vehicleLockState`
   - `VEHICLELOCKSTATE_UNLOCKED`

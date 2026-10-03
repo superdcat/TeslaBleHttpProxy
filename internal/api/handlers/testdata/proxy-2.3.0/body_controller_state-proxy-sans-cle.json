@@ -1,0 +1,19 @@
+{
+  "cas": "body_controller_state : proxy sans cle privee",
+  "requete": {
+    "methode": "GET",
+    "chemin": "/api/1/vehicles/TESLABLE000000001/body_controller_state",
+    "corps": null
+  },
+  "reponse": {
+    "statut_http": 503,
+    "corps": {
+      "response": {
+        "result": false,
+        "reason": "BleControl is not initialized. Maybe private.pem is missing.",
+        "vin": "TESLABLE000000001",
+        "command": "body-controller-state"
+      }
+    }
+  }
+}

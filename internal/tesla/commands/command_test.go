@@ -40,3 +40,31 @@ func TestCommandAbandoned(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandDomain(t *testing.T) {
+	tests := []struct {
+		command string
+		want    DomainType
+	}{
+		{BodyControllerStateCommand, Domain.VCSEC},
+		{"wake_up", Domain.None},
+		{"door_lock", Domain.None},
+		{"vehicle_data", Domain.None},
+		{"session_info", Domain.None},
+		{"body_controller_state", Domain.None},
+	}
+	for _, tt := range tests {
+		if got := CommandDomain(tt.command); got != tt.want {
+			t.Errorf("CommandDomain(%q) = %q, want %q", tt.command, got, tt.want)
+		}
+	}
+}
+
+func TestBodyControllerStateIsQueuedOnly(t *testing.T) {
+	if !sendSwitchCases(t)[BodyControllerStateCommand] {
+		t.Errorf("Send has no case %q", BodyControllerStateCommand)
+	}
+	if IsSupportedCommand(BodyControllerStateCommand) {
+		t.Errorf("%q must not be accepted on the command route", BodyControllerStateCommand)
+	}
+}
