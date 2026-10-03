@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -47,6 +49,11 @@ func commonDefer(w http.ResponseWriter, response *models.Response) {
 	logging.Debug("Response", "Command", response.Command, "Status", status, "Result", response.Result, "Reason", response.Reason)
 }
 
+// enqueueCommand puts a command on the BLE queue (replaced in tests).
+var enqueueCommand = func(command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) {
+	control.BleControlInstance.PushCommand(command, vin, body, response, autoWakeup)
+}
+
 func checkBleControl(response *models.Response) bool {
 	if control.BleControlInstance == nil {
 		response.Reason = "BleControl is not initialized. Maybe private.pem is missing."
@@ -78,15 +85,35 @@ func Command(w http.ResponseWriter, r *http.Request) {
 
 	//Body
 	var body map[string]interface{} = nil
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" && !strings.Contains(err.Error(), "cannot unmarshal bool") {
-		logging.Error("Decoding body", "Error", err)
+	decodeErr := json.NewDecoder(r.Body).Decode(&body)
+	unreadable := decodeErr != nil && !errors.Is(decodeErr, io.EOF)
+	if unreadable && !strings.Contains(decodeErr.Error(), "cannot unmarshal bool") {
+		logging.Error("Decoding body", "Error", decodeErr)
 	}
 
 	logRequestWithBody(r, "Command", body)
 
-	if !slices.Contains(commands.ExceptedCommands, command) {
+	// A partial decoding (e.g. {"on":true,"x":1e999} gives an UnmarshalTypeError but keeps the
+	// keys already read) must never be queued; commands without body ignore the body as in 2.3.0.
+	if unreadable {
+		body = nil
+	}
+
+	if !commands.IsSupportedCommand(command) {
 		logging.Error("Command not supported", "Command", command)
 		response.Reason = fmt.Sprintf("The command \"%s\" is not supported.", command)
+		response.Result = false
+		return
+	}
+
+	// Refuse an invalid body before queuing it, also with wait=false. The JSON decoding error
+	// is logged above; its Go text is not returned to the client.
+	if err := commands.ValidateCommandBody(command, body); err != nil {
+		if unreadable {
+			err = fmt.Errorf("%w: not a valid JSON object", commands.ErrInvalidBody)
+		}
+		logging.Error("Invalid request body", "Command", command, "Error", err)
+		response.Reason = err.Error()
 		response.Result = false
 		return
 	}
@@ -98,7 +125,7 @@ func Command(w http.ResponseWriter, r *http.Request) {
 		apiResponse.Ctx = r.Context()
 
 		wg.Add(1)
-		control.BleControlInstance.PushCommand(command, vin, body, &apiResponse, autoWakeup)
+		enqueueCommand(command, vin, body, &apiResponse, autoWakeup)
 
 		wg.Wait()
 
@@ -113,7 +140,7 @@ func Command(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	control.BleControlInstance.PushCommand(command, vin, body, nil, autoWakeup)
+	enqueueCommand(command, vin, body, nil, autoWakeup)
 	response.Result = true
 	response.Reason = "The command was successfully received and will be processed shortly."
 }

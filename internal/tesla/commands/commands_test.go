@@ -98,9 +98,18 @@ func missingCases(expected []string, handled map[string]bool) []string {
 	return missing
 }
 
-func TestAllExceptedCommandsImplemented(t *testing.T) {
-	for _, name := range missingCases(ExceptedCommands, sendSwitchCases(t)) {
-		t.Errorf("command %q is in ExceptedCommands but has no case in (*Command).Send", name)
+func TestLegacyRouteCommandsHaveSendCase(t *testing.T) {
+	for _, name := range missingCases(legacyRouteCommands, sendSwitchCases(t)) {
+		t.Errorf("command %q is in legacyRouteCommands but has no case in (*Command).Send", name)
+	}
+}
+
+func TestRegistryCommandsAreNotInSendSwitch(t *testing.T) {
+	cases := sendSwitchCases(t)
+	for name := range fleetVehicleCommands {
+		if cases[name] {
+			t.Errorf("command %q is in the registry and also has a case in (*Command).Send", name)
+		}
 	}
 }
 

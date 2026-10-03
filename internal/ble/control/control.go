@@ -548,7 +548,9 @@ func (bc *BleControl) ExecuteCommand(car *vehicle.Vehicle, command *commands.Com
 		}
 
 		if !retry {
-			return nil, nil, ctx
+			// Not retryable (e.g. invalid body): report the failure, never a success.
+			logging.Error("Command failed", "Command", command.Command, "Error", err)
+			return nil, err, ctx
 		}
 
 		if strings.Contains(err.Error(), "closed pipe") {
