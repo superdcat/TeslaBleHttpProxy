@@ -79,26 +79,37 @@ func TestStatesMatchGolden(t *testing.T) {
 		{"body_controller_state_open.golden.json", VehicleStatusFromBle(&open)},
 	}
 	for _, tt := range tests {
-		t.Run(tt.golden, func(t *testing.T) {
-			got, err := json.MarshalIndent(tt.value, "", "  ")
-			if err != nil {
-				t.Fatal(err)
-			}
-			got = append(got, '\n')
-			path := filepath.Join("testdata", tt.golden)
-			if *update {
-				if err := os.WriteFile(path, got, 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			want, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
-			if !bytes.Equal(got, want) {
-				t.Errorf("%s differs from the converter output:\n--- got\n%s--- want\n%s", path, got, want)
-			}
-		})
+		t.Run(tt.golden, func(t *testing.T) { checkGolden(t, tt.golden, tt.value) })
 	}
+}
+
+// checkGolden compares the indented JSON of value with testdata/<golden> (rewritten with -update).
+func checkGolden(t *testing.T, golden string, value any) {
+	t.Helper()
+	got, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, '\n')
+	path := filepath.Join("testdata", golden)
+	if *update {
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s differs from the converter output:\n--- got\n%s--- want\n%s", path, got, want)
+	}
+}
+
+// TestDriveStateMatchesGolden pins the wire encoding and the JSON of drive_state (wimaha PR #160 contract).
+func TestDriveStateMatchesGolden(t *testing.T) {
+	var vd carserver.VehicleData
+	readWireInput(t, "drive_state", &vd)
+	checkGolden(t, "drive_state.golden.json", DriveStateFromBle(&vd))
 }

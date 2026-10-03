@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/teslamotors/vehicle-command/pkg/protocol"
-	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
 	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/keys"
 	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/vcsec"
 	"github.com/teslamotors/vehicle-command/pkg/vehicle"
@@ -21,29 +19,6 @@ import (
 // Fleet vehicle commands of the registry (fleetVehicleCommands.go): (*Command).Send handles
 // them in its switch and they take no validated body.
 var legacyRouteCommands = []string{"vehicle_data", "session_info"}
-var ExceptedEndpoints = []string{"charge_state", "climate_state", "drive_state"}
-
-// VehicleDataEndpointNames returns the sorted names of the vehicle_data endpoints served by the
-// proxy. The slice is a fresh copy.
-func VehicleDataEndpointNames() []string {
-	names := slices.Clone(ExceptedEndpoints)
-	slices.Sort(names)
-	return names
-}
-
-// convertVehicleData converts the BLE vehicle data of an endpoint to its API model.
-// It reports false (and returns nil) for an endpoint without converter.
-func convertVehicleData(endpoint string, data *carserver.VehicleData) (interface{}, bool) {
-	switch endpoint {
-	case "charge_state":
-		return models.ChargeStateFromBle(data), true
-	case "climate_state":
-		return models.ClimateStateFromBle(data), true
-	case "drive_state":
-		return models.DriveStateFromBle(data), true
-	}
-	return nil, false
-}
 
 // BodyControllerStateJSON is the response of the body_controller_state route (snake_case since 2.1.1).
 func BodyControllerStateJSON(vs *vcsec.VehicleStatus) (json.RawMessage, error) {
@@ -143,37 +118,11 @@ func (command *Command) Send(ctx context.Context, car *vehicle.Vehicle) (shouldR
 			return false, fmt.Errorf("missing or invalid 'endpoints' in request body")
 		}
 
-		response := make(map[string]json.RawMessage)
-		for _, endpoint := range endpoints {
-			//log.Debugf("get: %s", endpoint)
-			category, err := GetCategory(endpoint)
-			if err != nil {
-				return false, err
-			}
-			data, err := car.GetState(ctx, category)
-			if err != nil {
-				return true, fmt.Errorf("Failed to get vehicle data: %s", err)
-			}
-			/*d, err := protojson.Marshal(data)
-			if err != nil {
-				return true, fmt.Errorf("failed to marshal vehicle data: %s", err)
-			}
-			logging.Debugf("data: %s", d)*/
-
-			converted, _ := convertVehicleData(endpoint, data) // nil (JSON null) without converter, as in 2.3.0
-			d, err := json.Marshal(converted)
-			if err != nil {
-				return true, fmt.Errorf("Failed to marshal vehicle data: %s", err)
-			}
-
-			response[endpoint] = d
-		}
-
-		responseJson, err := json.Marshal(response)
+		responseJSON, retry, err := VehicleDataJSON(ctx, endpoints, car.GetState)
 		if err != nil {
-			return false, fmt.Errorf("failed to marshal vehicle data: %s", err)
+			return retry, err
 		}
-		command.Response.Response = responseJson
+		command.Response.Response = responseJSON
 	case "body-controller-state":
 		vs, err := car.BodyControllerState(ctx)
 		if err != nil {

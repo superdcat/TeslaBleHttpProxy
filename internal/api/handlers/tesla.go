@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -201,7 +200,7 @@ func VehicleData(w http.ResponseWriter, r *http.Request) {
 	if endpointsString != "" {
 		endpoints = strings.Split(endpointsString, ";")
 	} else {
-		endpoints = []string{"charge_state", "climate_state"} //'charge_state', 'climate_state', 'closures_state', 'drive_state', 'gui_settings', 'location_data', 'charge_schedule_data', 'preconditioning_schedule_data', 'vehicle_config', 'vehicle_state', 'vehicle_data_combo'
+		endpoints = commands.DefaultVehicleDataEndpoints()
 	}
 
 	var response models.Response
@@ -209,7 +208,7 @@ func VehicleData(w http.ResponseWriter, r *http.Request) {
 	response.Command = command
 
 	for _, endpoint := range endpoints {
-		if !slices.Contains(commands.ExceptedEndpoints, endpoint) {
+		if !commands.IsSupportedEndpoint(endpoint) {
 			logging.Error("Endpoint not supported", "Endpoint", endpoint)
 			response.Reason = fmt.Sprintf("The endpoint \"%s\" is not supported.", endpoint)
 			response.Result = false

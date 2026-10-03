@@ -1,0 +1,8 @@
+drive_state {
+  shift_state { D {} }
+  speed: 13
+  power: 42
+  timestamp { seconds: 1767254400 }
+  odometer_in_hundredths_of_a_mile: 1234567
+  speed_float: 12.5
+}

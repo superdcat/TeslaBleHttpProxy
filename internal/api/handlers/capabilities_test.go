@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -167,5 +168,28 @@ func TestCapabilityFeaturesAuthRequired(t *testing.T) { // UC1007
 				t.Errorf("token leaked in %s", body)
 			}
 		})
+	}
+}
+
+// AC6: the endpoints announced to the clients are written out, not only read from the registry.
+func TestCapabilitiesAnnounceVehicleDataEndpoints(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var ret struct {
+		Response struct {
+			Response struct {
+				Endpoints []string `json:"vehicle_data_endpoints"`
+			} `json:"response"`
+		} `json:"response"`
+	}
+	rec := getCapabilities(t, "capabilities")
+	if err := json.Unmarshal(rec.Body.Bytes(), &ret); err != nil {
+		t.Fatalf("invalid JSON %q: %v", rec.Body.String(), err)
+	}
+	got := ret.Response.Response.Endpoints
+	for _, want := range []string{"charge_state", "climate_state", "drive_state"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("vehicle_data_endpoints %v does not contain %q", got, want)
+		}
 	}
 }

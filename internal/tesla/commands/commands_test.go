@@ -1,15 +1,13 @@
 package commands
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
-	"slices"
 	"strconv"
 	"testing"
-
-	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
 )
 
 // sendSwitchCases reads commands.go and returns the string literals of the
@@ -189,48 +187,25 @@ func TestMissingCasesReportsUnhandledCommand(t *testing.T) {
 	}
 }
 
-func TestVehicleDataEndpointNamesAreWired(t *testing.T) {
-	names := VehicleDataEndpointNames()
-
-	want := slices.Clone(ExceptedEndpoints)
-	slices.Sort(want)
-	if !slices.Equal(names, want) {
-		t.Errorf("VehicleDataEndpointNames() = %v, want %v", names, want)
+// The vehicle_data guards answer before the vehicle is touched: a nil vehicle is enough.
+func TestSendVehicleDataGuards(t *testing.T) {
+	tests := []struct {
+		name string
+		body map[string]interface{}
+		want string
+	}{
+		{"nil body", nil, "request body is nil"},
+		{"endpoints absent", map[string]interface{}{}, "missing or invalid 'endpoints' in request body"},
+		{"endpoints of another type", map[string]interface{}{"endpoints": "drive_state"}, "missing or invalid 'endpoints' in request body"},
+		{"endpoints as []interface{}", map[string]interface{}{"endpoints": []interface{}{"drive_state"}}, "missing or invalid 'endpoints' in request body"},
 	}
-
-	for _, endpoint := range names {
-		if _, err := GetCategory(endpoint); err != nil {
-			t.Errorf("endpoint %q has no state category: %v", endpoint, err)
-		}
-		converted, ok := convertVehicleData(endpoint, &carserver.VehicleData{})
-		if !ok || converted == nil {
-			t.Errorf("endpoint %q has no converter (ok=%v, value=%v)", endpoint, ok, converted)
-		}
-	}
-
-	// The result is a copy: changing it must not alter the next call nor the filter.
-	names[0] = "changed"
-	if again := VehicleDataEndpointNames(); !slices.Equal(again, want) {
-		t.Errorf("second call = %v, want %v", again, want)
-	}
-	if slices.Contains(ExceptedEndpoints, "changed") {
-		t.Errorf("ExceptedEndpoints was modified through the returned slice")
-	}
-}
-
-func TestConvertVehicleDataUnknownEndpoint(t *testing.T) {
-	converted, ok := convertVehicleData("nope", &carserver.VehicleData{})
-	if ok || converted != nil {
-		t.Errorf("convertVehicleData(nope) = (%v, %v), want (nil, false)", converted, ok)
-	}
-}
-
-// The API only grows: removing one of these endpoints must be a deliberate change of this test.
-func TestVehicleDataEndpointNamesFloor(t *testing.T) {
-	names := VehicleDataEndpointNames()
-	for _, endpoint := range []string{"charge_state", "climate_state"} {
-		if !slices.Contains(names, endpoint) {
-			t.Errorf("endpoint %q is missing from VehicleDataEndpointNames()", endpoint)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			command := &Command{Command: "vehicle_data", Body: tt.body}
+			retry, err := command.Send(context.Background(), nil)
+			if err == nil || err.Error() != tt.want || retry {
+				t.Errorf("Send() = (%v, %v), want (false, %q)", retry, err, tt.want)
+			}
+		})
 	}
 }

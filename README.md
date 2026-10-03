@@ -339,6 +339,8 @@ Get specific data with automatic wakeup:
 
 This is recommended if you want to receive data frequently, since it will reduce the time it takes to receive the data.
 
+**`drive_state` (superdcat fork):** `drive_state` returns `timestamp`, `shift_state` (`P`, `R`, `N`, `D`, or an empty string when the vehicle does not report it), `speed`, `power` and `odometer`; the `odometer` is in **miles** (convert it to km by multiplying by 1.609344). It is not part of the default response. The vehicle has to be awake: nothing is woken up unless you pass `wakeup=true`, and the values come from the cache for up to `vehicleDataCacheTime` seconds, so they are not real-time. An unknown endpoint makes the whole request fail with `503` (`The endpoint "x" is not supported.`), names are case-sensitive, and `drive` or hyphenated names are not accepted (as in wimaha 2.3.0). A key can be missing from a response if its read failed while another endpoint was served from the cache. The endpoints accepted are listed in `vehicle_data_endpoints` of `/api/proxy/1/capabilities`.
+
 ### Body Controller State
 
 The body controller state is fetched from the vehicle and returnes the state of the body controller. The request does not wake up the vehicle. In this fork it goes through the BLE command queue (VCSEC domain): it waits for the command in progress and reuses its connection for the same VIN, and answers `503` with `context deadline exceeded` when the queue stays busy for more than 15 seconds (`features.body_controller_state_queued` in the capabilities). The following information is returned:

@@ -1,0 +1,255 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"testing"
+
+	"github.com/gorilla/mux"
+	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
+	"github.com/teslamotors/vehicle-command/pkg/vehicle"
+	"github.com/wimaha/TeslaBleHttpProxy/config"
+	"github.com/wimaha/TeslaBleHttpProxy/internal/api/models"
+	"github.com/wimaha/TeslaBleHttpProxy/internal/ble/control"
+	"github.com/wimaha/TeslaBleHttpProxy/internal/tesla/commands"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	vehicleDataProcessed = "The request was successfully processed."
+	driveStateJSON       = `{"timestamp":1767254400,"shift_state":"D","speed":12.5,"power":42,"odometer":12345.67}`
+)
+
+// resetVehicleDataCache empties the global vehicle_data cache.
+func resetVehicleDataCache() {
+	vehicleDataCacheMux.Lock()
+	defer vehicleDataCacheMux.Unlock()
+	for key := range vehicleDataCache {
+		delete(vehicleDataCache, key)
+	}
+}
+
+// useVehicleDataCache sets the cache duration and empties the global cache, before and after the test.
+func useVehicleDataCache(t *testing.T, seconds int) {
+	t.Helper()
+	previous := config.AppConfig
+	t.Cleanup(func() {
+		config.AppConfig = previous
+		resetVehicleDataCache()
+	})
+	config.AppConfig = &config.Config{VehicleDataCacheTime: seconds}
+	resetVehicleDataCache()
+}
+
+type queuedVehicleData struct {
+	command    string
+	endpoints  []string
+	autoWakeup bool
+}
+
+// vehicleDataQueue replaces the BLE queue: it notes each queued read and answers like the BLE loop,
+// from the wire fixtures of the models golden tests (drive_state.binpb for the drive category,
+// vehicle_data.binpb for the others).
+func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
+	t.Helper()
+	queued := &[]queuedVehicleData{}
+	useQueue(t, func(ctx context.Context, command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) error {
+		endpoints, _ := body["endpoints"].([]string)
+		*queued = append(*queued, queuedVehicleData{command, endpoints, autoWakeup})
+		read := func(_ context.Context, category vehicle.StateCategory) (*carserver.VehicleData, error) {
+			name := "vehicle_data"
+			if category == vehicle.StateCategoryDrive {
+				name = "drive_state"
+			}
+			b, err := os.ReadFile(filepath.Join("..", "models", "testdata", name+".binpb"))
+			if err != nil {
+				return nil, err
+			}
+			var vd carserver.VehicleData
+			if err := proto.Unmarshal(b, &vd); err != nil {
+				return nil, err
+			}
+			return &vd, nil
+		}
+		j, _, err := commands.VehicleDataJSON(ctx, endpoints, read)
+		if err != nil {
+			response.Error = err.Error()
+		} else {
+			response.Result, response.Response = true, j
+		}
+		response.Finish()
+		return nil
+	})
+	return queued
+}
+
+func getVehicleData(t *testing.T, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	router := mux.NewRouter()
+	router.HandleFunc("/api/1/vehicles/{vin}/vehicle_data", VehicleData).Methods("GET")
+	req := httptest.NewRequest(http.MethodGet, "/api/1/vehicles/"+testVIN+"/vehicle_data"+query, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func vehicleDataBody(inner string) string {
+	return `{"response":{"result":true,"reason":"` + vehicleDataProcessed + `","vin":"` + testVIN +
+		`","command":"vehicle_data","response":` + inner + `}}` + "\n"
+}
+
+func compactGolden(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "models", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := json.Compact(&out, b); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+// AC3: drive_state is served in the standard envelope.
+func TestVehicleDataDriveState(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+
+	rec := getVehicleData(t, "?endpoints=drive_state")
+
+	want := vehicleDataBody(`{"drive_state":` + driveStateJSON + `}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+	}
+	if want := []queuedVehicleData{{"vehicle_data", []string{"drive_state"}, false}}; !reflect.DeepEqual(*queued, want) {
+		t.Errorf("queued %+v, want %+v", *queued, want)
+	}
+}
+
+// AC4, AC7: the default is still charge_state and climate_state, as served by 2.3.0 (golden files).
+func TestVehicleDataDefaultMatches230(t *testing.T) {
+	for _, query := range []string{"", "?endpoints="} {
+		t.Run("query "+query, func(t *testing.T) {
+			useVehicleDataCache(t, 30)
+			queued := vehicleDataQueue(t)
+
+			rec := getVehicleData(t, query)
+
+			want := vehicleDataBody(`{"charge_state":` + compactGolden(t, "charge_state.golden.json") +
+				`,"climate_state":` + compactGolden(t, "climate_state.golden.json") + `}`)
+			if rec.Code != http.StatusOK || rec.Body.String() != want {
+				t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+			}
+			if want := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "climate_state"}, false}}; !reflect.DeepEqual(*queued, want) {
+				t.Errorf("queued %+v, want %+v", *queued, want)
+			}
+		})
+	}
+}
+
+// AC4: endpoints combine.
+func TestVehicleDataCombinedEndpoints(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+
+	rec := getVehicleData(t, "?endpoints="+url.QueryEscape("charge_state;drive_state"))
+
+	want := vehicleDataBody(`{"charge_state":` + compactGolden(t, "charge_state.golden.json") + `,"drive_state":` + driveStateJSON + `}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+	}
+	if want := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "drive_state"}, false}}; !reflect.DeepEqual(*queued, want) {
+		t.Errorf("queued %+v, want %+v", *queued, want)
+	}
+}
+
+// AC5: an unknown endpoint fails the whole request before anything is queued (exact, case-sensitive match).
+func TestVehicleDataUnsupportedEndpoint(t *testing.T) {
+	for _, tc := range []struct{ query, bad string }{
+		{"x", "x"},
+		{"nimportequoi", "nimportequoi"},
+		{"drive", "drive"},
+		{"Drive_State", "Drive_State"},
+		{"DRIVE_STATE", "DRIVE_STATE"},
+		{"charge-schedule", "charge-schedule"},
+		{"tire-pressure", "tire-pressure"},
+		{"charge_state;nimportequoi", "nimportequoi"},
+		{"drive_state;", ""},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			useVehicleDataCache(t, 30)
+			queued := vehicleDataQueue(t)
+
+			rec := getVehicleData(t, "?endpoints="+url.QueryEscape(tc.query))
+
+			want := envelope(false, `The endpoint \"`+tc.bad+`\" is not supported.`, "vehicle_data")
+			if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != want {
+				t.Errorf("got %d %s\nwant 503 %s", rec.Code, rec.Body.String(), want)
+			}
+			if len(*queued) != 0 {
+				t.Errorf("queued %+v, want nothing", *queued)
+			}
+		})
+	}
+}
+
+// The endpoint check comes before checkBleControl: no BLE instance still gives the 503 "not supported".
+func TestVehicleDataUnsupportedEndpointWithoutBle(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+	previous := control.BleControlInstance
+	t.Cleanup(func() { control.BleControlInstance = previous })
+	control.BleControlInstance = nil
+
+	rec := getVehicleData(t, "?endpoints=x")
+
+	want := envelope(false, `The endpoint \"x\" is not supported.`, "vehicle_data")
+	if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != want {
+		t.Errorf("got %d %s\nwant 503 %s", rec.Code, rec.Body.String(), want)
+	}
+	if len(*queued) != 0 {
+		t.Errorf("queued %+v, want nothing", *queued)
+	}
+}
+
+// The 30 s cache is per VIN and endpoint; wakeup=true is the only way to ask for a wake-up.
+func TestVehicleDataDriveStateCacheAndWakeup(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+	wantBody := vehicleDataBody(`{"drive_state":` + driveStateJSON + `}`)
+
+	for i := 0; i < 2; i++ {
+		if rec := getVehicleData(t, "?endpoints=drive_state"); rec.Code != http.StatusOK || rec.Body.String() != wantBody {
+			t.Fatalf("call %d: got %d %s", i, rec.Code, rec.Body.String())
+		}
+	}
+	if len(*queued) != 1 {
+		t.Fatalf("queued %d reads for two requests within the cache time, want 1", len(*queued))
+	}
+
+	// drive_state is cached, charge_state is not: as in 2.3.0 the handler queues every endpoint of the request as soon as one is missing.
+	rec := getVehicleData(t, "?endpoints="+url.QueryEscape("drive_state;charge_state"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d %s", rec.Code, rec.Body.String())
+	}
+	if len(*queued) != 2 || !slices.Equal((*queued)[1].endpoints, []string{"drive_state", "charge_state"}) {
+		t.Errorf("queued %+v", *queued)
+	}
+
+	resetVehicleDataCache()
+	if rec := getVehicleData(t, "?endpoints=drive_state&wakeup=true"); rec.Code != http.StatusOK {
+		t.Fatalf("got %d %s", rec.Code, rec.Body.String())
+	}
+	if last := (*queued)[len(*queued)-1]; !last.autoWakeup {
+		t.Errorf("last queued read %+v, want autoWakeup", last)
+	}
+}
