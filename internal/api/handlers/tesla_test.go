@@ -155,6 +155,27 @@ func TestCommandRoute(t *testing.T) {
 			envelope(true, received, "set_bioweapon_mode"),
 			[]queuedCommand{{"set_bioweapon_mode", map[string]interface{}{"on": false}, false}}},
 
+		// UC1012: seat and steering wheel commands refused before queuing, whatever wait is; valid bodies queued unchanged.
+		{"seat heater 9", "remote_seat_heater_request", "", `{"heater":9,"level":1}`, nil, 503,
+			envelope(false, "invalid request body: heater must be an integer between 0 and 8", "remote_seat_heater_request"), nil},
+		{"seat heater level -1 wait=true", "remote_seat_heater_request", "?wait=true", `{"heater":0,"level":-1}`, nil, 503,
+			envelope(false, "invalid request body: level must be an integer between 0 and 3", "remote_seat_heater_request"), nil},
+		{"seat heater queued unchanged", "remote_seat_heater_request", "", `{"heater":0,"level":"3"}`, nil, 200,
+			envelope(true, received, "remote_seat_heater_request"),
+			[]queuedCommand{{"remote_seat_heater_request", map[string]interface{}{"heater": 0.0, "level": "3"}, false}}},
+		{"seat cooler position 3", "remote_seat_cooler_request", "", `{"seat_position":3,"seat_cooler_level":1}`, nil, 503,
+			envelope(false, "invalid request body: seat_position must be an integer between 1 and 2", "remote_seat_cooler_request"), nil},
+		{"seat cooler queued unchanged", "remote_seat_cooler_request", "", `{"seat_position":1,"seat_cooler_level":0}`, nil, 200,
+			envelope(true, received, "remote_seat_cooler_request"),
+			[]queuedCommand{{"remote_seat_cooler_request", map[string]interface{}{"seat_position": 1.0, "seat_cooler_level": 0.0}, false}}},
+		{"auto seat position 0", "remote_auto_seat_climate_request", "", `{"auto_seat_position":0,"auto_climate_on":true}`, nil, 503,
+			envelope(false, "invalid request body: auto_seat_position must be an integer between 1 and 2", "remote_auto_seat_climate_request"), nil},
+		{"steering wheel empty object", "remote_steering_wheel_heater_request", "", `{}`, nil, 503,
+			envelope(false, "invalid request body: on missing", "remote_steering_wheel_heater_request"), nil},
+		{"steering wheel queued unchanged", "remote_steering_wheel_heater_request", "", `{"on":true}`, nil, 200,
+			envelope(true, received, "remote_steering_wheel_heater_request"),
+			[]queuedCommand{{"remote_steering_wheel_heater_request", map[string]interface{}{"on": true}, false}}},
+
 		// AC7: unchanged 2.3.0 answers.
 		{"unsupported command", "x", "", `{}`, nil, 503, envelope(false, `The command \"x\" is not supported.`, "x"), nil},
 		{"wait=true success", "set_charging_amps", "?wait=true", `{"charging_amps":16}`, succeed, 200, envelope(true, processed, "set_charging_amps"),

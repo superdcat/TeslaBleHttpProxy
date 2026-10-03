@@ -194,6 +194,10 @@ The program uses the same interfaces as the Tesla [Fleet API](https://developer.
 - set_cabin_overheat_protection (superdcat fork)
 - set_cop_temp (superdcat fork)
 - set_bioweapon_mode (superdcat fork)
+- remote_seat_heater_request (superdcat fork)
+- remote_seat_cooler_request (superdcat fork)
+- remote_auto_seat_climate_request (superdcat fork)
+- remote_steering_wheel_heater_request (superdcat fork)
 
 By default, the program will return immediately after sending the command to the vehicle. If you want to wait for the command to complete, you can set the `wait` parameter to `true`.
 
@@ -249,6 +253,26 @@ Enable or disable bioweapon defense mode (superdcat fork):
 `on` is required; `manual_override` is optional and defaults to `false`.
 
 These four commands are expected to need the Owner role (a Charging Manager key should be refused by the vehicle).
+
+Heat a seat (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/remote_seat_heater_request` with body `{"heater": 0, "level": 3}`
+
+`heater` and `level` are required. `heater` is 0 front left, 1 front right, 2 second row left, 3 second row left back, 4 second row center, 5 second row right, 6 second row right back, 7 third row left, 8 third row right. `level` is 0 off, 1 low, 2 medium, 3 high.
+
+Ventilate a front seat (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/remote_seat_cooler_request` with body `{"seat_position": 1, "seat_cooler_level": 2}`
+
+`seat_position` is 1 front left or 2 front right (numbering starts at 1, unlike `heater`, as in the Fleet API and Home Assistant). `seat_cooler_level` is 0 off, 1 low, 2 medium, 3 high: the proxy follows the Fleet API, whereas the official Tesla proxy subtracts 1 from it (vehicle-command issue #50).
+
+Switch the automatic seat and climate mode of a front seat (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/remote_auto_seat_climate_request` with body `{"auto_seat_position": 1, "auto_climate_on": true}`
+
+`auto_seat_position` is 1 front left or 2 front right; `auto_climate_on` is required.
+
+Heat the steering wheel (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/remote_steering_wheel_heater_request` with body `{"on": true}`
+
+All the keys are required. The integer keys (`heater`, `level`, `seat_position`, `seat_cooler_level`, `auto_seat_position`) accept an integer or an integer string (`2.0` is accepted); fractions and out-of-range values are refused with HTTP 503 before the command is queued. `auto_climate_on` and `on` accept a boolean or `"true"`/`"false"`. There is no alias: `remote_seat_heater_request` does not read `seat_position`. The climate must be on, as documented by the Fleet API. Seats of the third row and the second row backrests only exist on equipped models; otherwise the vehicle refuses the command. These commands are expected to need the Owner role (a Charging Manager key should be refused by the vehicle).
 
 ### Vehicle Data
 

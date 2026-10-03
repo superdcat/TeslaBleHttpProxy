@@ -16,7 +16,10 @@ commands whose HTTP client stopped waiting, adapted (commits 64390c6, 40cb54b, 8
 (commit 94d1fd8); climate setpoint commands set_temps and set_preconditioning_max, adapted
 (commit 94d1fd8); climate keeper, cabin overheat protection and bioweapon defense
 commands set_climate_keeper_mode, set_cabin_overheat_protection, set_cop_temp and
-set_bioweapon_mode, adapted (commit 94d1fd8). Each ported change
+set_bioweapon_mode, adapted (commit 94d1fd8); seat heater, seat cooler, auto seat climate and
+steering wheel heater commands remote_seat_heater_request, remote_seat_cooler_request,
+remote_auto_seat_climate_request and remote_steering_wheel_heater_request, adapted
+(commit 94d1fd8). Each ported change
 references the original Lenart12 commit in its commit message.
 
 Changes made in this fork are recorded in the git history of this repository.

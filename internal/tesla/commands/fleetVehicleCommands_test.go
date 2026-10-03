@@ -73,6 +73,75 @@ func (f *fakeCar) SetCabinOverheatProtectionTemperature(_ context.Context, level
 func (f *fakeCar) SetBioweaponDefenseMode(_ context.Context, on, manualOverride bool) error {
 	return f.record(fmt.Sprintf("SetBioweaponDefenseMode(%t,%t)", on, manualOverride))
 }
+
+// SetSeatHeater records the entries sorted by seat, named by hand per SDK constant (sdkSeatName),
+// so the expectation does not depend on the Fleet integer.
+func (f *fakeCar) SetSeatHeater(_ context.Context, levels map[vehicle.SeatPosition]vehicle.Level) error {
+	seats := slices.Sorted(maps.Keys(levels))
+	parts := make([]string, 0, len(seats))
+	for _, seat := range seats {
+		parts = append(parts, sdkSeatName(seat)+"="+sdkLevelName(levels[seat]))
+	}
+	return f.record("SetSeatHeater(" + strings.Join(parts, ",") + ")")
+}
+
+// SetSeatCooler uses the same cast as the SDK (climate.go): the level is shifted by one.
+func (f *fakeCar) SetSeatCooler(_ context.Context, level vehicle.Level, seat vehicle.SeatPosition) error {
+	return f.record(fmt.Sprintf("SetSeatCooler(%s,%s)", sdkSeatName(seat),
+		carserver.HvacSeatCoolerActions_HvacSeatCoolerLevel_E(level+1)))
+}
+func (f *fakeCar) AutoSeatAndClimate(_ context.Context, positions []vehicle.SeatPosition, on bool) error {
+	names := make([]string, 0, len(positions))
+	for _, seat := range positions {
+		names = append(names, sdkSeatName(seat))
+	}
+	return f.record(fmt.Sprintf("AutoSeatAndClimate([%s],%t)", strings.Join(names, ","), on))
+}
+func (f *fakeCar) SetSteeringWheelHeater(_ context.Context, on bool) error {
+	return f.record(fmt.Sprintf("SetSteeringWheelHeater(%t)", on))
+}
+
+// sdkSeatName names an SDK seat constant by hand (the SDK has no String()).
+func sdkSeatName(seat vehicle.SeatPosition) string {
+	switch seat {
+	case vehicle.SeatUnknown:
+		return "SeatUnknown"
+	case vehicle.SeatFrontLeft:
+		return "SeatFrontLeft"
+	case vehicle.SeatFrontRight:
+		return "SeatFrontRight"
+	case vehicle.SeatSecondRowLeft:
+		return "SeatSecondRowLeft"
+	case vehicle.SeatSecondRowLeftBack:
+		return "SeatSecondRowLeftBack"
+	case vehicle.SeatSecondRowCenter:
+		return "SeatSecondRowCenter"
+	case vehicle.SeatSecondRowRight:
+		return "SeatSecondRowRight"
+	case vehicle.SeatSecondRowRightBack:
+		return "SeatSecondRowRightBack"
+	case vehicle.SeatThirdRowLeft:
+		return "SeatThirdRowLeft"
+	case vehicle.SeatThirdRowRight:
+		return "SeatThirdRowRight"
+	}
+	return fmt.Sprintf("seat(%d)", int(seat))
+}
+
+// sdkLevelName names an SDK level constant by hand.
+func sdkLevelName(level vehicle.Level) string {
+	switch level {
+	case vehicle.LevelOff:
+		return "LevelOff"
+	case vehicle.LevelLow:
+		return "LevelLow"
+	case vehicle.LevelMed:
+		return "LevelMed"
+	case vehicle.LevelHigh:
+		return "LevelHigh"
+	}
+	return fmt.Sprintf("level(%d)", int(level))
+}
 func (f *fakeCar) ChangeChargeLimit(_ context.Context, percent int32) error {
 	return f.record(fmt.Sprintf("ChangeChargeLimit(%d)", percent))
 }
@@ -321,6 +390,87 @@ func TestCommandBodies(t *testing.T) {
 		{"set_bioweapon_mode", `{"on":true,"manual_override":"yes"}`, "", "invalid request body: manual_override is not a valid boolean"},
 		{"set_bioweapon_mode", `{"on":1}`, "", `invalid request body: on must be a boolean or "true"/"false"`},
 		{"set_bioweapon_mode", `{"on":true,"manual_override":1}`, "", `invalid request body: manual_override must be a boolean or "true"/"false"`},
+
+		// remote_seat_heater_request (UC1012): heater 0-8 (Fleet numbering), level 0-3.
+		{"remote_seat_heater_request", `{"heater":0,"level":0}`, "SetSeatHeater(SeatFrontLeft=LevelOff)", ""},
+		{"remote_seat_heater_request", `{"heater":1,"level":1}`, "SetSeatHeater(SeatFrontRight=LevelLow)", ""},
+		{"remote_seat_heater_request", `{"heater":2,"level":2}`, "SetSeatHeater(SeatSecondRowLeft=LevelMed)", ""},
+		{"remote_seat_heater_request", `{"heater":3,"level":3}`, "SetSeatHeater(SeatSecondRowLeftBack=LevelHigh)", ""},
+		{"remote_seat_heater_request", `{"heater":4,"level":0}`, "SetSeatHeater(SeatSecondRowCenter=LevelOff)", ""},
+		{"remote_seat_heater_request", `{"heater":5,"level":1}`, "SetSeatHeater(SeatSecondRowRight=LevelLow)", ""},
+		{"remote_seat_heater_request", `{"heater":6,"level":2}`, "SetSeatHeater(SeatSecondRowRightBack=LevelMed)", ""},
+		{"remote_seat_heater_request", `{"heater":7,"level":3}`, "SetSeatHeater(SeatThirdRowLeft=LevelHigh)", ""},
+		{"remote_seat_heater_request", `{"heater":8,"level":0}`, "SetSeatHeater(SeatThirdRowRight=LevelOff)", ""},
+		{"remote_seat_heater_request", `{"heater":6,"level":0}`, "SetSeatHeater(SeatSecondRowRightBack=LevelOff)", ""},
+		{"remote_seat_heater_request", `{"heater":2,"level":3}`, "SetSeatHeater(SeatSecondRowLeft=LevelHigh)", ""},
+		{"remote_seat_heater_request", `{"heater":"1","level":"2"}`, "SetSeatHeater(SeatFrontRight=LevelMed)", ""},
+		{"remote_seat_heater_request", `{"heater":8.0,"level":3.0}`, "SetSeatHeater(SeatThirdRowRight=LevelHigh)", ""},
+		{"remote_seat_heater_request", ``, "", "invalid request body: heater missing"},
+		{"remote_seat_heater_request", `{}`, "", "invalid request body: heater missing"},
+		{"remote_seat_heater_request", `{"heater":null,"level":1}`, "", "invalid request body: heater missing"},
+		{"remote_seat_heater_request", `{"heater":0}`, "", "invalid request body: level missing"},
+		{"remote_seat_heater_request", `{"level":1}`, "", "invalid request body: heater missing"},
+		{"remote_seat_heater_request", `{"seat_position":0,"level":1}`, "", "invalid request body: heater missing"},
+		{"remote_seat_heater_request", `{"heater":9,"level":1}`, "", "invalid request body: heater must be an integer between 0 and 8"},
+		{"remote_seat_heater_request", `{"heater":-1,"level":1}`, "", "invalid request body: heater must be an integer between 0 and 8"},
+		{"remote_seat_heater_request", `{"heater":0.5,"level":1}`, "", "invalid request body: heater must be an integer between 0 and 8"},
+		{"remote_seat_heater_request", `{"heater":0,"level":4}`, "", "invalid request body: level must be an integer between 0 and 3"},
+		{"remote_seat_heater_request", `{"heater":0,"level":-1}`, "", "invalid request body: level must be an integer between 0 and 3"},
+		{"remote_seat_heater_request", `{"heater":0,"level":1.5}`, "", "invalid request body: level must be an integer between 0 and 3"},
+		{"remote_seat_heater_request", `{"heater":9,"level":4}`, "", "invalid request body: heater must be an integer between 0 and 8"},
+		{"remote_seat_heater_request", `{"heater":"9","level":1}`, "", "invalid request body: heater must be an integer between 0 and 8"},
+		{"remote_seat_heater_request", `{"heater":"left","level":1}`, "", "invalid request body: heater is not a valid integer"},
+		{"remote_seat_heater_request", `{"heater":"","level":1}`, "", "invalid request body: heater is not a valid integer"},
+		{"remote_seat_heater_request", `{"heater":0,"level":" 1"}`, "", "invalid request body: level is not a valid integer"},
+		{"remote_seat_heater_request", `{"heater":true,"level":1}`, "", "invalid request body: heater must be a number or a numeric string"},
+		{"remote_seat_heater_request", `{"heater":0,"level":[1]}`, "", "invalid request body: level must be a number or a numeric string"},
+		{"remote_seat_heater_request", `{"heater":3e9,"level":1}`, "", "invalid request body: heater is out of range"},
+		{"remote_seat_heater_request", `{"heater":0,"level":"3000000000"}`, "", "invalid request body: level is out of range"},
+
+		// remote_seat_cooler_request (UC1012): seat_position 1-2 (front left/right), seat_cooler_level 0-3 (0 = off).
+		{"remote_seat_cooler_request", `{"seat_position":1,"seat_cooler_level":0}`, "SetSeatCooler(SeatFrontLeft,HvacSeatCoolerLevel_Off)", ""},
+		{"remote_seat_cooler_request", `{"seat_position":2,"seat_cooler_level":3}`, "SetSeatCooler(SeatFrontRight,HvacSeatCoolerLevel_High)", ""},
+		{"remote_seat_cooler_request", `{"seat_position":1,"seat_cooler_level":1}`, "SetSeatCooler(SeatFrontLeft,HvacSeatCoolerLevel_Low)", ""},
+		{"remote_seat_cooler_request", `{"seat_position":"2","seat_cooler_level":"2"}`, "SetSeatCooler(SeatFrontRight,HvacSeatCoolerLevel_Med)", ""},
+		{"remote_seat_cooler_request", `{"seat_position":2.0,"seat_cooler_level":0.0}`, "SetSeatCooler(SeatFrontRight,HvacSeatCoolerLevel_Off)", ""},
+		{"remote_seat_cooler_request", ``, "", "invalid request body: seat_position missing"},
+		{"remote_seat_cooler_request", `{}`, "", "invalid request body: seat_position missing"},
+		{"remote_seat_cooler_request", `{"seat_position":1}`, "", "invalid request body: seat_cooler_level missing"},
+		{"remote_seat_cooler_request", `{"seat_cooler_level":1}`, "", "invalid request body: seat_position missing"},
+		{"remote_seat_cooler_request", `{"heater":1,"level":1}`, "", "invalid request body: seat_position missing"},
+		{"remote_seat_cooler_request", `{"seat_position":0,"seat_cooler_level":1}`, "", "invalid request body: seat_position must be an integer between 1 and 2"},
+		{"remote_seat_cooler_request", `{"seat_position":3,"seat_cooler_level":1}`, "", "invalid request body: seat_position must be an integer between 1 and 2"},
+		{"remote_seat_cooler_request", `{"seat_position":1.5,"seat_cooler_level":1}`, "", "invalid request body: seat_position must be an integer between 1 and 2"},
+		{"remote_seat_cooler_request", `{"seat_position":1,"seat_cooler_level":4}`, "", "invalid request body: seat_cooler_level must be an integer between 0 and 3"},
+		{"remote_seat_cooler_request", `{"seat_position":1,"seat_cooler_level":-1}`, "", "invalid request body: seat_cooler_level must be an integer between 0 and 3"},
+		{"remote_seat_cooler_request", `{"seat_position":"left","seat_cooler_level":1}`, "", "invalid request body: seat_position is not a valid integer"},
+		{"remote_seat_cooler_request", `{"seat_position":true,"seat_cooler_level":1}`, "", "invalid request body: seat_position must be a number or a numeric string"},
+		{"remote_seat_cooler_request", `{"seat_position":3e9,"seat_cooler_level":1}`, "", "invalid request body: seat_position is out of range"},
+
+		// remote_auto_seat_climate_request (UC1012): auto_seat_position 1-2, auto_climate_on.
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":1,"auto_climate_on":true}`, "AutoSeatAndClimate([SeatFrontLeft],true)", ""},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":2,"auto_climate_on":false}`, "AutoSeatAndClimate([SeatFrontRight],false)", ""},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":"1","auto_climate_on":"true"}`, "AutoSeatAndClimate([SeatFrontLeft],true)", ""},
+		{"remote_auto_seat_climate_request", ``, "", "invalid request body: auto_seat_position missing"},
+		{"remote_auto_seat_climate_request", `{}`, "", "invalid request body: auto_seat_position missing"},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":1}`, "", "invalid request body: auto_climate_on missing"},
+		{"remote_auto_seat_climate_request", `{"auto_climate_on":true}`, "", "invalid request body: auto_seat_position missing"},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":0,"auto_climate_on":true}`, "", "invalid request body: auto_seat_position must be an integer between 1 and 2"},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":3,"auto_climate_on":true}`, "", "invalid request body: auto_seat_position must be an integer between 1 and 2"},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":1.5,"auto_climate_on":true}`, "", "invalid request body: auto_seat_position must be an integer between 1 and 2"},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":"x","auto_climate_on":true}`, "", "invalid request body: auto_seat_position is not a valid integer"},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":1,"auto_climate_on":"yes"}`, "", "invalid request body: auto_climate_on is not a valid boolean"},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":1,"auto_climate_on":1}`, "", `invalid request body: auto_climate_on must be a boolean or "true"/"false"`},
+
+		// remote_steering_wheel_heater_request (UC1012): on required.
+		{"remote_steering_wheel_heater_request", `{"on":true}`, "SetSteeringWheelHeater(true)", ""},
+		{"remote_steering_wheel_heater_request", `{"on":false}`, "SetSteeringWheelHeater(false)", ""},
+		{"remote_steering_wheel_heater_request", `{"on":"true"}`, "SetSteeringWheelHeater(true)", ""},
+		{"remote_steering_wheel_heater_request", `{"on":"0"}`, "SetSteeringWheelHeater(false)", ""},
+		{"remote_steering_wheel_heater_request", ``, "", "invalid request body: on missing"},
+		{"remote_steering_wheel_heater_request", `{}`, "", "invalid request body: on missing"},
+		{"remote_steering_wheel_heater_request", `{"on":"yes"}`, "", "invalid request body: on is not a valid boolean"},
+		{"remote_steering_wheel_heater_request", `{"on":1}`, "", `invalid request body: on must be a boolean or "true"/"false"`},
 	}
 
 	covered := map[string]bool{}
@@ -418,6 +568,10 @@ func TestAddedCommandsVehicleErrors(t *testing.T) {
 		{"set_cabin_overheat_protection", `{"on":true}`, "failed to set cabin overheat protection: " + vehicleFault},
 		{"set_cop_temp", `{"cop_temp":"1"}`, "failed to set cabin overheat protection temperature to cop_temp 1: " + vehicleFault},
 		{"set_bioweapon_mode", `{"on":true}`, "failed to set bioweapon mode: " + vehicleFault},
+		{"remote_seat_heater_request", `{"heater":"2","level":1}`, "failed to set seat heater 2 to level 1: " + vehicleFault},
+		{"remote_seat_cooler_request", `{"seat_position":2,"seat_cooler_level":"3"}`, "failed to set seat cooler at seat_position 2 to level 3: " + vehicleFault},
+		{"remote_auto_seat_climate_request", `{"auto_seat_position":1,"auto_climate_on":true}`, "failed to set auto seat climate at auto_seat_position 1: " + vehicleFault},
+		{"remote_steering_wheel_heater_request", `{"on":true}`, "failed to set steering wheel heater: " + vehicleFault},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command+" "+tt.body, func(t *testing.T) { assertVehicleError(t, tt.command, tt.body, tt.want) })
@@ -510,6 +664,94 @@ func TestEnumArgRefusesNonFinite(t *testing.T) {
 	}
 }
 
+// UC1012 AC1: the Fleet seat tables match the SDK and protobuf constants.
+func TestFleetSeatTablesMatchSDK(t *testing.T) {
+	heaters := []vehicle.SeatPosition{
+		vehicle.SeatFrontLeft, vehicle.SeatFrontRight, vehicle.SeatSecondRowLeft, vehicle.SeatSecondRowLeftBack,
+		vehicle.SeatSecondRowCenter, vehicle.SeatSecondRowRight, vehicle.SeatSecondRowRightBack,
+		vehicle.SeatThirdRowLeft, vehicle.SeatThirdRowRight,
+	}
+	if len(seatHeaterPositions) != len(heaters) {
+		t.Fatalf("seatHeaterPositions has %d entries, want %d", len(seatHeaterPositions), len(heaters))
+	}
+	for i, want := range heaters {
+		if seatHeaterPositions[i] != want {
+			t.Errorf("heater %d = %s, want %s", i, sdkSeatName(seatHeaterPositions[i]), sdkSeatName(want))
+		}
+		if seatHeaterPositions[i] == vehicle.SeatUnknown {
+			t.Errorf("heater %d maps to SeatUnknown", i)
+		}
+	}
+
+	levels := []carserver.HvacSeatCoolerActions_HvacSeatCoolerLevel_E{
+		carserver.HvacSeatCoolerActions_HvacSeatCoolerLevel_Off,
+		carserver.HvacSeatCoolerActions_HvacSeatCoolerLevel_Low,
+		carserver.HvacSeatCoolerActions_HvacSeatCoolerLevel_Med,
+		carserver.HvacSeatCoolerActions_HvacSeatCoolerLevel_High,
+	}
+	if len(seatLevels) != len(levels) {
+		t.Fatalf("seatLevels has %d entries, want %d", len(seatLevels), len(levels))
+	}
+	for i, want := range levels {
+		// The SDK adds one to the level (climate.go).
+		if got := carserver.HvacSeatCoolerActions_HvacSeatCoolerLevel_E(seatLevels[i] + 1); got != want {
+			t.Errorf("level %d = %v, want %v", i, got, want)
+		}
+	}
+
+	// frontSeats is indexed by the Fleet value, which is the protobuf value; index 0 is unused.
+	if len(frontSeats) != 3 {
+		t.Fatalf("frontSeats has %d entries, want 3 (frontSeatArg accepts 1 and 2)", len(frontSeats))
+	}
+	if frontSeats[1] != vehicle.SeatFrontLeft || frontSeats[2] != vehicle.SeatFrontRight {
+		t.Errorf("frontSeats = %s, %s", sdkSeatName(frontSeats[1]), sdkSeatName(frontSeats[2]))
+	}
+	if carserver.HvacSeatCoolerActions_HvacSeatCoolerPosition_FrontLeft != 1 ||
+		carserver.HvacSeatCoolerActions_HvacSeatCoolerPosition_FrontRight != 2 ||
+		carserver.AutoSeatClimateAction_AutoSeatPosition_FrontLeft != 1 ||
+		carserver.AutoSeatClimateAction_AutoSeatPosition_FrontRight != 2 {
+		t.Error("the protobuf front seat values are no longer 1 and 2")
+	}
+}
+
+// intRangeArg: bounds, fractions (message built with lo and hi) and non-finite values.
+func TestIntRangeArg(t *testing.T) {
+	tests := []struct {
+		name   string
+		v      interface{}
+		lo, hi int
+		want   int
+		reason string
+	}{
+		{"in range", 2.0, 1, 2, 2, ""},
+		{"lower bound string", "1", 1, 2, 1, ""},
+		{"zero below lo", 0.0, 1, 2, 0, "k must be an integer between 1 and 2"},
+		{"zero string below lo", "0", 1, 2, 0, "k must be an integer between 1 and 2"},
+		{"above hi", 3.0, 1, 2, 0, "k must be an integer between 1 and 2"},
+		{"fraction", 1.5, 1, 2, 0, "k must be an integer between 1 and 2"},
+		{"NaN", math.NaN(), 1, 2, 0, "k must be an integer between 1 and 2"},
+		{"+Inf", math.Inf(1), 1, 2, 0, "k is out of range"},
+		{"-Inf", math.Inf(-1), 0, 8, 0, "k is out of range"},
+		{"not a number", "x", 1, 2, 0, "k is not a valid integer"},
+		{"bool", true, 1, 2, 0, "k must be a number or a numeric string"},
+		{"missing", nil, 1, 2, 0, "k missing"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := (commandArgs{"k": tt.v}).intRangeArg("k", tt.lo, tt.hi)
+			if tt.reason == "" {
+				if err != nil || got != tt.want {
+					t.Errorf("intRangeArg = %d, %v, want %d", got, err, tt.want)
+				}
+				return
+			}
+			if err == nil || err.Error() != "invalid request body: "+tt.reason {
+				t.Errorf("intRangeArg error = %v, want %q", err, tt.reason)
+			}
+		})
+	}
+}
+
 // AC6: "already charging", "charging complete" and "not charging" stay successes.
 func TestAlreadyDoneErrorsAreSuccess(t *testing.T) {
 	vehicleRefusal := func(reason string) error {
@@ -582,6 +824,7 @@ func TestFleetCommandNamesFloor(t *testing.T) {
 		"set_charge_limit", "set_charging_amps", "set_sentry_mode", "wake_up",
 		"set_preconditioning_max", "set_temps",
 		"set_climate_keeper_mode", "set_cabin_overheat_protection", "set_cop_temp", "set_bioweapon_mode",
+		"remote_seat_heater_request", "remote_seat_cooler_request", "remote_auto_seat_climate_request", "remote_steering_wheel_heater_request",
 	}
 	names := FleetCommandNames()
 	for _, name := range floor {

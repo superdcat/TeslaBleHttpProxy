@@ -6,8 +6,9 @@
 // (commit 94d1fd8), Copyright Lenart12 and contributors, Apache License 2.0.
 // Modified in the superdcat fork: lenient parsing of wimaha 2.3.0 (numeric strings,
 // "true"/"false", decimals truncated), no value bounds on the wimaha 2.3.0 commands,
-// wimaha 2.3.0 error messages, validation without mutating the body, vehicle behind an
-// interface for tests. set_temps follows the contract of wimaha/TeslaBleHttpProxy PR #162.
+// wimaha 2.3.0 error messages, validation without mutating the body, explicit Fleet seat
+// tables (Lenart12 shifted the seat heater by one), vehicle behind an interface for tests.
+// set_temps follows the contract of wimaha/TeslaBleHttpProxy PR #162.
 
 package commands
 
@@ -50,6 +51,10 @@ type vehicleCommander interface {
 	SetCabinOverheatProtection(ctx context.Context, enabled bool, fanOnly bool) error
 	SetCabinOverheatProtectionTemperature(ctx context.Context, level vehicle.Level) error
 	SetBioweaponDefenseMode(ctx context.Context, enabled bool, manualOverride bool) error
+	SetSeatHeater(ctx context.Context, levels map[vehicle.SeatPosition]vehicle.Level) error
+	SetSeatCooler(ctx context.Context, level vehicle.Level, seat vehicle.SeatPosition) error
+	AutoSeatAndClimate(ctx context.Context, positions []vehicle.SeatPosition, enabled bool) error
+	SetSteeringWheelHeater(ctx context.Context, enabled bool) error
 }
 
 // Bounds of the cabin temperature setpoints, in degrees Celsius, inclusive (wimaha PR #162).
@@ -72,6 +77,32 @@ var climateKeeperModes = [...]vehicle.ClimateKeeperMode{
 // cast of cop_temp would be wrong. Source of the Fleet semantics:
 // https://developer.tesla.com/docs/fleet-api/endpoints/vehicle-commands (set_cop_temp).
 var copActivationLevels = [...]vehicle.Level{vehicle.LevelLow, vehicle.LevelMed, vehicle.LevelHigh}
+
+// seatHeaterPositions maps the Fleet heater (the index) to the SDK seat. The SDK numbers its
+// seats from SeatUnknown = 0, so vehicle.SeatPosition(heater) would be shifted by one seat.
+// Same order as pkg/proxy/command.go seatPositions of the official proxy.
+var seatHeaterPositions = [...]vehicle.SeatPosition{
+	vehicle.SeatFrontLeft,
+	vehicle.SeatFrontRight,
+	vehicle.SeatSecondRowLeft,
+	vehicle.SeatSecondRowLeftBack,
+	vehicle.SeatSecondRowCenter,
+	vehicle.SeatSecondRowRight,
+	vehicle.SeatSecondRowRightBack,
+	vehicle.SeatThirdRowLeft,
+	vehicle.SeatThirdRowRight,
+}
+
+// seatLevels maps the Fleet level and seat_cooler_level (the index) to the SDK level: 0 off,
+// 1 low, 2 medium, 3 high. SetSeatCooler adds one itself, so no "-1" here (vehicle-command #50).
+var seatLevels = [...]vehicle.Level{vehicle.LevelOff, vehicle.LevelLow, vehicle.LevelMed, vehicle.LevelHigh}
+
+// frontSeats maps the Fleet seat_position and auto_seat_position (the index, equal to the
+// protobuf values) to the SDK seat: 1 front left, 2 front right. Index 0 is never read.
+var frontSeats = [...]vehicle.SeatPosition{1: vehicle.SeatFrontLeft, 2: vehicle.SeatFrontRight}
+
+// firstFrontSeat is the lowest valid index of frontSeats.
+const firstFrontSeat = 1
 
 // climateKeeperManualOverride is always sent by set_climate_keeper_mode, as in Lenart12
 // (commit 94d1fd8); a manual_override key in the body is not read.
@@ -337,6 +368,73 @@ var fleetVehicleCommands = map[string]commandHandler{
 			return nil
 		},
 	},
+
+	// UC1012: seat heaters and coolers, auto seat climate and steering wheel heater (ported from Lenart12, adapted).
+	"remote_seat_heater_request": {
+		validate: func(args commandArgs) error {
+			if _, err := args.enumArg("heater", len(seatHeaterPositions)); err != nil {
+				return err
+			}
+			_, err := args.enumArg("level", len(seatLevels))
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			heater, _ := args.enumArg("heater", len(seatHeaterPositions)) // validated by run
+			level, _ := args.enumArg("level", len(seatLevels))            // validated by run
+			levels := map[vehicle.SeatPosition]vehicle.Level{seatHeaterPositions[heater]: seatLevels[level]}
+			if err := car.SetSeatHeater(ctx, levels); err != nil {
+				return fmt.Errorf("failed to set seat heater %d to level %d: %w", heater, level, err)
+			}
+			return nil
+		},
+	},
+	"remote_seat_cooler_request": {
+		validate: func(args commandArgs) error {
+			if _, err := args.frontSeatArg("seat_position"); err != nil {
+				return err
+			}
+			_, err := args.enumArg("seat_cooler_level", len(seatLevels))
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			seat, _ := args.frontSeatArg("seat_position")                  // validated by run
+			level, _ := args.enumArg("seat_cooler_level", len(seatLevels)) // validated by run
+			if err := car.SetSeatCooler(ctx, seatLevels[level], frontSeats[seat]); err != nil {
+				return fmt.Errorf("failed to set seat cooler at seat_position %d to level %d: %w", seat, level, err)
+			}
+			return nil
+		},
+	},
+	"remote_auto_seat_climate_request": {
+		validate: func(args commandArgs) error {
+			if _, err := args.frontSeatArg("auto_seat_position"); err != nil {
+				return err
+			}
+			_, err := args.boolArg("auto_climate_on")
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			seat, _ := args.frontSeatArg("auto_seat_position") // validated by run
+			on, _ := args.boolArg("auto_climate_on")           // validated by run
+			if err := car.AutoSeatAndClimate(ctx, []vehicle.SeatPosition{frontSeats[seat]}, on); err != nil {
+				return fmt.Errorf("failed to set auto seat climate at auto_seat_position %d: %w", seat, err)
+			}
+			return nil
+		},
+	},
+	"remote_steering_wheel_heater_request": {
+		validate: func(args commandArgs) error {
+			_, err := args.boolArg("on")
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			on, _ := args.boolArg("on") // validated by run
+			if err := car.SetSteeringWheelHeater(ctx, on); err != nil {
+				return fmt.Errorf("failed to set steering wheel heater: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // IsSupportedCommand reports whether name is accepted on the command route.
@@ -419,23 +517,33 @@ func (args commandArgs) int32Arg(key string) (int32, error) {
 	}
 }
 
-// enumArg reads a required Fleet enum index in [0, count): int32Arg tolerance and messages
+// intRangeArg reads a required Fleet integer in [lo, hi]: int32Arg tolerance and messages
 // (JSON number or decimal string), plus a refusal of fractions on the raw JSON number, so that
 // 2.5 is not read as 2 and -0.5 not as 0 (2.0 is accepted). Unlike int32Arg, which truncates
 // fractions on the 14 commands of 2.3.0, a mode must never be guessed. NaN is not equal to its
 // truncation and is refused as a fraction; infinities fall to int32Arg's out of range.
-func (args commandArgs) enumArg(key string, count int) (int, error) {
+func (args commandArgs) intRangeArg(key string, lo, hi int) (int, error) {
 	if f, ok := args[key].(float64); ok && f != math.Trunc(f) {
-		return 0, invalidBodyf("%s must be an integer between 0 and %d", key, count-1)
+		return 0, invalidBodyf("%s must be an integer between %d and %d", key, lo, hi)
 	}
 	n, err := args.int32Arg(key)
 	if err != nil {
 		return 0, err
 	}
-	if n < 0 || int(n) >= count {
-		return 0, invalidBodyf("%s must be an integer between 0 and %d", key, count-1)
+	if int(n) < lo || int(n) > hi {
+		return 0, invalidBodyf("%s must be an integer between %d and %d", key, lo, hi)
 	}
 	return int(n), nil
+}
+
+// enumArg reads a required Fleet enum index in [0, count), with the rules of intRangeArg.
+func (args commandArgs) enumArg(key string, count int) (int, error) {
+	return args.intRangeArg(key, 0, count-1)
+}
+
+// frontSeatArg reads a required front seat index of frontSeats (1 front left, 2 front right).
+func (args commandArgs) frontSeatArg(key string) (int, error) {
+	return args.intRangeArg(key, firstFrontSeat, len(frontSeats)-1)
 }
 
 // boolArg reads the required boolean key with the tolerance of wimaha 2.3.0: a JSON boolean
