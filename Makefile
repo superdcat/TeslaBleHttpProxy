@@ -3,14 +3,14 @@ TAG_NAME := $(shell test -d .git && git describe --abbrev=0 --tags)
 SHA := $(shell test -d .git && git rev-parse --short HEAD)
 VERSION := $(if $(TAG_NAME),$(TAG_NAME),$(SHA))
 
-LD_FLAGS := -X github.com/wimaha/TeslaBleHttpProxy/config.Version=$(VERSION) -s -w
+# An empty VERSION (no .git, e.g. a Docker build without --build-arg VERSION) keeps the code default.
+VERSION_FLAG := $(if $(VERSION),-X github.com/wimaha/TeslaBleHttpProxy/config.Version=$(VERSION))
+LD_FLAGS := $(VERSION_FLAG) -s -w
 BUILD_ARGS := -ldflags='$(LD_FLAGS)'
 BUILD_DATE := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 
-# docker
-DOCKER_IMAGE := wimaha/tesla-ble-http-proxy
-DOCKER_TAG := dev
-PLATFORM := linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7
+# docker (local build only: images are published by .github/workflows/release.yml)
+DOCKER_IMAGE := ghcr.io/superdcat/tesla-ble-http-proxy
 
 export DOCKER_CLI_EXPERIMENTAL=enabled
 
@@ -29,13 +29,5 @@ build-docker::
 
 docker::
 	@echo Version: $(VERSION) $(SHA) $(BUILD_DATE)
-	docker buildx build --tag $(DOCKER_IMAGE) --output "type=docker,push=false" . 
+	docker buildx build --build-arg VERSION=$(VERSION) --tag $(DOCKER_IMAGE):local --output "type=docker,push=false" .
 #--progress=plain --no-cache 
-
-dev::
-	@echo Version: $(VERSION) $(SHA) $(BUILD_DATE)
-	docker buildx build --platform $(PLATFORM) --tag $(DOCKER_IMAGE):$(DOCKER_TAG) --output "type=image,push=true" .
-
-publish::
-	@echo Version: $(VERSION) $(SHA) $(BUILD_DATE)
-	docker buildx build --platform $(PLATFORM) --tag $(DOCKER_IMAGE) --tag $(DOCKER_IMAGE):$(VERSION) --tag $(DOCKER_IMAGE):$(DOCKER_TAG) --output "type=image,push=true" .

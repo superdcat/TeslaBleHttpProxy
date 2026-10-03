@@ -1,45 +1,250 @@
-name: Release
+name: Publish
 
-env:
-  GO_VERSION: ^1.25
+# Multi-arch image ghcr.io/superdcat/tesla-ble-http-proxy (linux/amd64, arm64, arm/v7, arm/v6).
+# - push on main            -> image tag "edge"
+# - push of tag X.Y.Z-tb.N  -> image tags "X.Y.Z-tb.N", "latest", "sha-<short sha>"
+#                              + GitHub release with the four linux binaries
+# Authentication: GITHUB_TOKEN only (no Docker Hub, no repository secret).
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - "*"
-  workflow_dispatch:
+      - "*-tb.*"
+
+permissions: {}
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
+env:
+  GO_VERSION: ^1.25
+  IMAGE: ghcr.io/superdcat/tesla-ble-http-proxy
+  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
 
 jobs:
-  docker:
-    name: Publish Docker :release
+  ci:
+    name: CI
+    permissions:
+      contents: read
+    uses: ./.github/workflows/default.yml
+
+  image:
+    name: Image
+    needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Login
-        uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASS }}
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Setup Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Version
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="$GITHUB_REF_NAME"
+            if ! printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+-tb\.[0-9]+'; then
+              echo "::error::tag '$version' does not match X.Y.Z-tb.N"
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::tag '$version' does not point to a commit of main"
+              exit 1
+            fi
+          else
+            version="edge-${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Meta
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: wimaha/tesla-ble-http-proxy
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest
-            type=raw,value=dev
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=sha,enable=${{ github.ref_type == 'tag' }}
+            type=edge,branch=main
 
-      - name: Publish
-        uses: docker/build-push-action@v6
+      - name: Build binaries (not pushed)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          platforms: linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7
+          platforms: ${{ env.PLATFORMS }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          provenance: false
+          sbom: false
+          outputs: type=local,dest=${{ runner.temp }}/out
+
+      - name: Check binaries
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dist"
+          check() {
+            local dir="$1" asset="$2" goarch="$3" goarm="$4" bin info
+            bin="$RUNNER_TEMP/out/$dir/teslaBleHttpProxy"
+            info="$(go version -m "$bin")"
+            grep -qx "$(printf '\tbuild\tGOOS=linux')" <<<"$info" || { echo "::error::$bin: GOOS is not linux"; exit 1; }
+            grep -qx "$(printf '\tbuild\tGOARCH=%s' "$goarch")" <<<"$info" || { echo "::error::$bin: GOARCH is not $goarch"; exit 1; }
+            if [ -n "$goarm" ]; then
+              grep -qx "$(printf '\tbuild\tGOARM=%s' "$goarm")" <<<"$info" || { echo "::error::$bin: GOARM is not $goarm"; exit 1; }
+            fi
+            grep -qF "config.Version=${VERSION} " <<<"$info" || { echo "::error::$bin: version is not $VERSION"; exit 1; }
+            cp "$bin" "$RUNNER_TEMP/dist/TeslaBleHttpProxy-linux-$asset"
+          }
+          check linux_amd64  amd64 amd64 ""
+          check linux_arm64  arm64 arm64 ""
+          check linux_arm_v7 armv7 arm   7
+          check linux_arm_v6 armv6 arm   6
+          ls -l "$RUNNER_TEMP/dist"
+
+      - name: Load amd64 image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: linux/amd64
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          provenance: false
+          sbom: false
+          load: true
+          tags: tesla-ble-http-proxy:ci
+
+      - name: Check image config
+        run: |
+          set -euo pipefail
+          cfg="$(docker image inspect tesla-ble-http-proxy:ci --format '{{json .Config}}')"
+          check() {
+            jq -e "$1" <<<"$cfg" >/dev/null || { echo "::error::image config: $2"; exit 1; }
+          }
+          check '.Entrypoint == ["/teslaBleHttpProxy"]' "entrypoint is not /teslaBleHttpProxy"
+          check '(.ExposedPorts | keys) == ["8080/tcp"]' "exposed ports are not exactly 8080/tcp"
+          check '.Env | index("TZ=Europe/Berlin") != null' "TZ is not Europe/Berlin"
+          check '(.WorkingDir // "") as $w | $w == "" or $w == "/"' "working directory is not /"
+          check '(.User // "") == ""' "user is not root"
+
+      - name: Smoke test (linux/amd64 image)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cid="$(docker run -d -p 127.0.0.1:18080:8080 tesla-ble-http-proxy:ci)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          body="$RUNNER_TEMP/body.json"
+          for _ in $(seq 1 30); do
+            curl -fsS -o "$body" http://127.0.0.1:18080/api/proxy/1/version && break
+            sleep 0.5
+          done
+          if ! jq -e --arg v "$VERSION" '.response.result == true and .response.response.version == $v' "$body"; then
+            docker logs "$cid" || true
+            echo "::error::/api/proxy/1/version did not return $VERSION"
+            exit 1
+          fi
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          provenance: false
+          sbom: false
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Check published platforms
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          got="$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' \
+            | jq -r '.manifests[].platform | "\(.os)/\(.architecture)\(if .variant then "/" + .variant else "" end)"' \
+            | LC_ALL=C sort | paste -sd, -)"
+          want="linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64"
+          if [ "$got" != "$want" ]; then
+            echo "::error::published platforms are '$got', expected '$want'"
+            exit 1
+          fi
+
+      - name: Check published binaries
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          check() {
+            local platform="$1" asset="$2" id want got
+            docker pull --platform "$platform" "$REF" >/dev/null
+            id="$(docker create --platform "$platform" "$REF")"
+            docker cp "$id:/teslaBleHttpProxy" "$RUNNER_TEMP/published-$asset"
+            docker rm "$id" >/dev/null
+            want="$(sha256sum "$RUNNER_TEMP/dist/TeslaBleHttpProxy-linux-$asset" | cut -d' ' -f1)"
+            got="$(sha256sum "$RUNNER_TEMP/published-$asset" | cut -d' ' -f1)"
+            [ "$got" = "$want" ] || { echo "::error::published $platform binary differs from release asset"; exit 1; }
+          }
+          check linux/amd64  amd64
+          check linux/arm64  arm64
+          check linux/arm/v7 armv7
+          check linux/arm/v6 armv6
+
+      - name: Keep release binaries
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-binaries
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: GitHub release
+    needs: image
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-binaries
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$(ls dist/TeslaBleHttpProxy-linux-* | wc -l)" -eq 4
+          gh release create "$TAG" dist/TeslaBleHttpProxy-linux-* --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --verify-tag

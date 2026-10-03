@@ -1,0 +1,4 @@
+# Build context of the Docker image: the version comes from --build-arg VERSION, not from .git.
+.git
+key/
+docs/
