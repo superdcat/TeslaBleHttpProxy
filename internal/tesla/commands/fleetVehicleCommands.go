@@ -46,6 +46,10 @@ type vehicleCommander interface {
 	ChangeChargeLimit(ctx context.Context, chargeLimitPercent int32) error
 	ChangeClimateTemp(ctx context.Context, driverCelsius float32, passengerCelsius float32) error
 	SetPreconditioningMax(ctx context.Context, enabled bool, manualOverride bool) error
+	SetClimateKeeperMode(ctx context.Context, mode vehicle.ClimateKeeperMode, override bool) error
+	SetCabinOverheatProtection(ctx context.Context, enabled bool, fanOnly bool) error
+	SetCabinOverheatProtectionTemperature(ctx context.Context, level vehicle.Level) error
+	SetBioweaponDefenseMode(ctx context.Context, enabled bool, manualOverride bool) error
 }
 
 // Bounds of the cabin temperature setpoints, in degrees Celsius, inclusive (wimaha PR #162).
@@ -53,6 +57,25 @@ const (
 	minCabinTempCelsius = 15
 	maxCabinTempCelsius = 28
 )
+
+// climateKeeperModes maps the Fleet climate_keeper_mode (the index) to the SDK mode:
+// 0 off, 1 on, 2 dog, 3 camp.
+var climateKeeperModes = [...]vehicle.ClimateKeeperMode{
+	vehicle.ClimateKeeperModeOff,
+	vehicle.ClimateKeeperModeOn,
+	vehicle.ClimateKeeperModeDog,
+	vehicle.ClimateKeeperModeCamp,
+}
+
+// copActivationLevels maps the Fleet cop_temp (the index) to the SDK level: 0 low (30 C),
+// 1 medium (35 C), 2 high (40 C). vehicle.Level is shifted by one (LevelOff is 0), so a direct
+// cast of cop_temp would be wrong. Source of the Fleet semantics:
+// https://developer.tesla.com/docs/fleet-api/endpoints/vehicle-commands (set_cop_temp).
+var copActivationLevels = [...]vehicle.Level{vehicle.LevelLow, vehicle.LevelMed, vehicle.LevelHigh}
+
+// climateKeeperManualOverride is always sent by set_climate_keeper_mode, as in Lenart12
+// (commit 94d1fd8); a manual_override key in the body is not read.
+const climateKeeperManualOverride = true
 
 var _ vehicleCommander = (*vehicle.Vehicle)(nil)
 
@@ -252,6 +275,68 @@ var fleetVehicleCommands = map[string]commandHandler{
 			return nil
 		},
 	},
+
+	// UC1011: climate keeper, cabin overheat protection and bioweapon defense (ported from Lenart12, adapted).
+	"set_climate_keeper_mode": {
+		validate: func(args commandArgs) error {
+			_, err := args.enumArg("climate_keeper_mode", len(climateKeeperModes))
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			mode, _ := args.enumArg("climate_keeper_mode", len(climateKeeperModes)) // validated by run
+			if err := car.SetClimateKeeperMode(ctx, climateKeeperModes[mode], climateKeeperManualOverride); err != nil {
+				return fmt.Errorf("failed to set climate keeper mode to %d: %w", mode, err)
+			}
+			return nil
+		},
+	},
+	"set_cabin_overheat_protection": {
+		validate: func(args commandArgs) error {
+			if _, err := args.boolArg("on"); err != nil {
+				return err
+			}
+			_, err := args.optBoolArg("fan_only")
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			on, _ := args.boolArg("on")               // validated by run
+			fanOnly, _ := args.optBoolArg("fan_only") // validated by run
+			if err := car.SetCabinOverheatProtection(ctx, on, fanOnly); err != nil {
+				return fmt.Errorf("failed to set cabin overheat protection: %w", err)
+			}
+			return nil
+		},
+	},
+	"set_cop_temp": {
+		validate: func(args commandArgs) error {
+			_, err := args.enumArg("cop_temp", len(copActivationLevels))
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			copTemp, _ := args.enumArg("cop_temp", len(copActivationLevels)) // validated by run
+			if err := car.SetCabinOverheatProtectionTemperature(ctx, copActivationLevels[copTemp]); err != nil {
+				return fmt.Errorf("failed to set cabin overheat protection temperature to cop_temp %d: %w", copTemp, err)
+			}
+			return nil
+		},
+	},
+	"set_bioweapon_mode": {
+		validate: func(args commandArgs) error {
+			if _, err := args.boolArg("on"); err != nil {
+				return err
+			}
+			_, err := args.optBoolArg("manual_override")
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			on, _ := args.boolArg("on")                             // validated by run
+			manualOverride, _ := args.optBoolArg("manual_override") // validated by run
+			if err := car.SetBioweaponDefenseMode(ctx, on, manualOverride); err != nil {
+				return fmt.Errorf("failed to set bioweapon mode: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // IsSupportedCommand reports whether name is accepted on the command route.
@@ -332,6 +417,25 @@ func (args commandArgs) int32Arg(key string) (int32, error) {
 	default:
 		return 0, invalidBodyf("%s must be a number or a numeric string", key)
 	}
+}
+
+// enumArg reads a required Fleet enum index in [0, count): int32Arg tolerance and messages
+// (JSON number or decimal string), plus a refusal of fractions on the raw JSON number, so that
+// 2.5 is not read as 2 and -0.5 not as 0 (2.0 is accepted). Unlike int32Arg, which truncates
+// fractions on the 14 commands of 2.3.0, a mode must never be guessed. NaN is not equal to its
+// truncation and is refused as a fraction; infinities fall to int32Arg's out of range.
+func (args commandArgs) enumArg(key string, count int) (int, error) {
+	if f, ok := args[key].(float64); ok && f != math.Trunc(f) {
+		return 0, invalidBodyf("%s must be an integer between 0 and %d", key, count-1)
+	}
+	n, err := args.int32Arg(key)
+	if err != nil {
+		return 0, err
+	}
+	if n < 0 || int(n) >= count {
+		return 0, invalidBodyf("%s must be an integer between 0 and %d", key, count-1)
+	}
+	return int(n), nil
 }
 
 // boolArg reads the required boolean key with the tolerance of wimaha 2.3.0: a JSON boolean

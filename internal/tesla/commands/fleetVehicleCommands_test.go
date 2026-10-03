@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	"github.com/teslamotors/vehicle-command/pkg/protocol"
+	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
 	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/universalmessage"
+	"github.com/teslamotors/vehicle-command/pkg/vehicle"
 )
 
 // commandsOf230 are the 14 vehicle commands of wimaha 2.3.0, migrated to the registry.
@@ -56,6 +58,20 @@ func (f *fakeCar) ChangeClimateTemp(_ context.Context, driver, passenger float32
 }
 func (f *fakeCar) SetPreconditioningMax(_ context.Context, on, manualOverride bool) error {
 	return f.record(fmt.Sprintf("SetPreconditioningMax(%t,%t)", on, manualOverride))
+}
+func (f *fakeCar) SetClimateKeeperMode(_ context.Context, mode vehicle.ClimateKeeperMode, override bool) error {
+	return f.record(fmt.Sprintf("SetClimateKeeperMode(%s,%t)", mode, override))
+}
+func (f *fakeCar) SetCabinOverheatProtection(_ context.Context, on, fanOnly bool) error {
+	return f.record(fmt.Sprintf("SetCabinOverheatProtection(%t,%t)", on, fanOnly))
+}
+
+// Same cast as the SDK (climate.go): the level becomes the protobuf activation temperature.
+func (f *fakeCar) SetCabinOverheatProtectionTemperature(_ context.Context, level vehicle.Level) error {
+	return f.record(fmt.Sprintf("SetCabinOverheatProtectionTemperature(%s)", carserver.ClimateState_CopActivationTemp(level)))
+}
+func (f *fakeCar) SetBioweaponDefenseMode(_ context.Context, on, manualOverride bool) error {
+	return f.record(fmt.Sprintf("SetBioweaponDefenseMode(%t,%t)", on, manualOverride))
 }
 func (f *fakeCar) ChangeChargeLimit(_ context.Context, percent int32) error {
 	return f.record(fmt.Sprintf("ChangeChargeLimit(%d)", percent))
@@ -232,6 +248,79 @@ func TestCommandBodies(t *testing.T) {
 		{"set_preconditioning_max", `{"on":1}`, "", `invalid request body: on must be a boolean or "true"/"false"`},
 		{"set_preconditioning_max", `{"on":true,"manual_override":"yes"}`, "", "invalid request body: manual_override is not a valid boolean"},
 		{"set_preconditioning_max", `{"on":true,"manual_override":1}`, "", `invalid request body: manual_override must be a boolean or "true"/"false"`},
+
+		// set_climate_keeper_mode (UC1011): 0 off, 1 on, 2 dog, 3 camp; manual_override always true.
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":0}`, "SetClimateKeeperMode(ClimateKeeperAction_Off,true)", ""},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":1}`, "SetClimateKeeperMode(ClimateKeeperAction_On,true)", ""},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":2}`, "SetClimateKeeperMode(ClimateKeeperAction_Dog,true)", ""},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":3}`, "SetClimateKeeperMode(ClimateKeeperAction_Camp,true)", ""},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":"2"}`, "SetClimateKeeperMode(ClimateKeeperAction_Dog,true)", ""},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":2.0}`, "SetClimateKeeperMode(ClimateKeeperAction_Dog,true)", ""},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":"+3"}`, "SetClimateKeeperMode(ClimateKeeperAction_Camp,true)", ""},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":2,"manual_override":false}`, "SetClimateKeeperMode(ClimateKeeperAction_Dog,true)", ""},
+		{"set_climate_keeper_mode", ``, "", "invalid request body: climate_keeper_mode missing"},
+		{"set_climate_keeper_mode", `{}`, "", "invalid request body: climate_keeper_mode missing"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":null}`, "", "invalid request body: climate_keeper_mode missing"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":4}`, "", "invalid request body: climate_keeper_mode must be an integer between 0 and 3"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":-1}`, "", "invalid request body: climate_keeper_mode must be an integer between 0 and 3"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":"4"}`, "", "invalid request body: climate_keeper_mode must be an integer between 0 and 3"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":2.5}`, "", "invalid request body: climate_keeper_mode must be an integer between 0 and 3"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":-0.5}`, "", "invalid request body: climate_keeper_mode must be an integer between 0 and 3"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":"dog"}`, "", "invalid request body: climate_keeper_mode is not a valid integer"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":""}`, "", "invalid request body: climate_keeper_mode is not a valid integer"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":" 2"}`, "", "invalid request body: climate_keeper_mode is not a valid integer"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":"2.0"}`, "", "invalid request body: climate_keeper_mode is not a valid integer"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":true}`, "", "invalid request body: climate_keeper_mode must be a number or a numeric string"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":[2]}`, "", "invalid request body: climate_keeper_mode must be a number or a numeric string"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":3e9}`, "", "invalid request body: climate_keeper_mode is out of range"},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":"3000000000"}`, "", "invalid request body: climate_keeper_mode is out of range"},
+
+		// set_cabin_overheat_protection (UC1011): on required, fan_only optional (false).
+		{"set_cabin_overheat_protection", `{"on":true}`, "SetCabinOverheatProtection(true,false)", ""},
+		{"set_cabin_overheat_protection", `{"on":false}`, "SetCabinOverheatProtection(false,false)", ""},
+		{"set_cabin_overheat_protection", `{"on":true,"fan_only":true}`, "SetCabinOverheatProtection(true,true)", ""},
+		{"set_cabin_overheat_protection", `{"on":"true","fan_only":"false"}`, "SetCabinOverheatProtection(true,false)", ""},
+		{"set_cabin_overheat_protection", `{"on":true,"fan_only":null}`, "SetCabinOverheatProtection(true,false)", ""},
+		{"set_cabin_overheat_protection", `{"on":false,"fan_only":true}`, "SetCabinOverheatProtection(false,true)", ""},
+		{"set_cabin_overheat_protection", ``, "", "invalid request body: on missing"},
+		{"set_cabin_overheat_protection", `{}`, "", "invalid request body: on missing"},
+		{"set_cabin_overheat_protection", `{"fan_only":true}`, "", "invalid request body: on missing"},
+		{"set_cabin_overheat_protection", `{"on":"yes"}`, "", "invalid request body: on is not a valid boolean"},
+		{"set_cabin_overheat_protection", `{"on":true,"fan_only":"yes"}`, "", "invalid request body: fan_only is not a valid boolean"},
+		{"set_cabin_overheat_protection", `{"on":1}`, "", `invalid request body: on must be a boolean or "true"/"false"`},
+		{"set_cabin_overheat_protection", `{"on":true,"fan_only":1}`, "", `invalid request body: fan_only must be a boolean or "true"/"false"`},
+
+		// set_cop_temp (UC1011): 0 low (30 C), 1 medium (35 C), 2 high (40 C).
+		{"set_cop_temp", `{"cop_temp":0}`, "SetCabinOverheatProtectionTemperature(CopActivationTempLow)", ""},
+		{"set_cop_temp", `{"cop_temp":1}`, "SetCabinOverheatProtectionTemperature(CopActivationTempMedium)", ""},
+		{"set_cop_temp", `{"cop_temp":2}`, "SetCabinOverheatProtectionTemperature(CopActivationTempHigh)", ""},
+		{"set_cop_temp", `{"cop_temp":"0"}`, "SetCabinOverheatProtectionTemperature(CopActivationTempLow)", ""},
+		{"set_cop_temp", `{"cop_temp":2.0}`, "SetCabinOverheatProtectionTemperature(CopActivationTempHigh)", ""},
+		{"set_cop_temp", ``, "", "invalid request body: cop_temp missing"},
+		{"set_cop_temp", `{}`, "", "invalid request body: cop_temp missing"},
+		{"set_cop_temp", `{"cop_temp":null}`, "", "invalid request body: cop_temp missing"},
+		{"set_cop_temp", `{"cop_temp":3}`, "", "invalid request body: cop_temp must be an integer between 0 and 2"},
+		{"set_cop_temp", `{"cop_temp":-1}`, "", "invalid request body: cop_temp must be an integer between 0 and 2"},
+		{"set_cop_temp", `{"cop_temp":"3"}`, "", "invalid request body: cop_temp must be an integer between 0 and 2"},
+		{"set_cop_temp", `{"cop_temp":1.5}`, "", "invalid request body: cop_temp must be an integer between 0 and 2"},
+		{"set_cop_temp", `{"cop_temp":"high"}`, "", "invalid request body: cop_temp is not a valid integer"},
+		{"set_cop_temp", `{"cop_temp":true}`, "", "invalid request body: cop_temp must be a number or a numeric string"},
+		{"set_cop_temp", `{"cop_temp":3e9}`, "", "invalid request body: cop_temp is out of range"},
+
+		// set_bioweapon_mode (UC1011): on required, manual_override optional (false).
+		{"set_bioweapon_mode", `{"on":true}`, "SetBioweaponDefenseMode(true,false)", ""},
+		{"set_bioweapon_mode", `{"on":false}`, "SetBioweaponDefenseMode(false,false)", ""},
+		{"set_bioweapon_mode", `{"on":true,"manual_override":true}`, "SetBioweaponDefenseMode(true,true)", ""},
+		{"set_bioweapon_mode", `{"on":"true","manual_override":"false"}`, "SetBioweaponDefenseMode(true,false)", ""},
+		{"set_bioweapon_mode", `{"on":true,"manual_override":null}`, "SetBioweaponDefenseMode(true,false)", ""},
+		{"set_bioweapon_mode", `{"on":false,"manual_override":true}`, "SetBioweaponDefenseMode(false,true)", ""},
+		{"set_bioweapon_mode", ``, "", "invalid request body: on missing"},
+		{"set_bioweapon_mode", `{}`, "", "invalid request body: on missing"},
+		{"set_bioweapon_mode", `{"manual_override":true}`, "", "invalid request body: on missing"},
+		{"set_bioweapon_mode", `{"on":"yes"}`, "", "invalid request body: on is not a valid boolean"},
+		{"set_bioweapon_mode", `{"on":true,"manual_override":"yes"}`, "", "invalid request body: manual_override is not a valid boolean"},
+		{"set_bioweapon_mode", `{"on":1}`, "", `invalid request body: on must be a boolean or "true"/"false"`},
+		{"set_bioweapon_mode", `{"on":true,"manual_override":1}`, "", `invalid request body: manual_override must be a boolean or "true"/"false"`},
 	}
 
 	covered := map[string]bool{}
@@ -325,6 +414,10 @@ func TestAddedCommandsVehicleErrors(t *testing.T) {
 		{"set_temps", `{"driver_temp":21}`, "failed to set temps to 21.0/21.0: " + vehicleFault},
 		{"set_temps", `{"driver_temp":21.5,"passenger_temp":"19"}`, "failed to set temps to 21.5/19.0: " + vehicleFault},
 		{"set_preconditioning_max", `{"on":true}`, "failed to set preconditioning max: " + vehicleFault},
+		{"set_climate_keeper_mode", `{"climate_keeper_mode":2}`, "failed to set climate keeper mode to 2: " + vehicleFault},
+		{"set_cabin_overheat_protection", `{"on":true}`, "failed to set cabin overheat protection: " + vehicleFault},
+		{"set_cop_temp", `{"cop_temp":"1"}`, "failed to set cabin overheat protection temperature to cop_temp 1: " + vehicleFault},
+		{"set_bioweapon_mode", `{"on":true}`, "failed to set bioweapon mode: " + vehicleFault},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command+" "+tt.body, func(t *testing.T) { assertVehicleError(t, tt.command, tt.body, tt.want) })
@@ -365,6 +458,55 @@ func TestOptFloatArgRefusesNonFinite(t *testing.T) {
 	}
 	if err := checkCabinTemp("driver_temp", math.NaN()); err == nil {
 		t.Error("checkCabinTemp accepted NaN")
+	}
+}
+
+// UC1011 AC1: the Fleet index tables match the SDK and protobuf constants.
+func TestFleetEnumTablesMatchSDK(t *testing.T) {
+	keeper := []carserver.HvacClimateKeeperAction_ClimateKeeperAction_E{
+		carserver.HvacClimateKeeperAction_ClimateKeeperAction_Off,
+		carserver.HvacClimateKeeperAction_ClimateKeeperAction_On,
+		carserver.HvacClimateKeeperAction_ClimateKeeperAction_Dog,
+		carserver.HvacClimateKeeperAction_ClimateKeeperAction_Camp,
+	}
+	if len(climateKeeperModes) != len(keeper) {
+		t.Fatalf("climateKeeperModes has %d entries, want %d", len(climateKeeperModes), len(keeper))
+	}
+	for i, want := range keeper {
+		if climateKeeperModes[i] != want {
+			t.Errorf("climate_keeper_mode %d = %v, want %v", i, climateKeeperModes[i], want)
+		}
+	}
+	cop := []carserver.ClimateState_CopActivationTemp{
+		carserver.ClimateState_CopActivationTempLow,
+		carserver.ClimateState_CopActivationTempMedium,
+		carserver.ClimateState_CopActivationTempHigh,
+	}
+	if len(copActivationLevels) != len(cop) {
+		t.Fatalf("copActivationLevels has %d entries, want %d", len(copActivationLevels), len(cop))
+	}
+	for i, want := range cop {
+		if got := carserver.ClimateState_CopActivationTemp(copActivationLevels[i]); got != want {
+			t.Errorf("cop_temp %d = %v, want %v", i, got, want)
+		}
+	}
+}
+
+// enumArg refuses NaN as a fraction and falls back to out of range for infinities
+// (unreachable through JSON).
+func TestEnumArgRefusesNonFinite(t *testing.T) {
+	tests := []struct {
+		v    float64
+		want string
+	}{
+		{math.NaN(), "invalid request body: k must be an integer between 0 and 2"},
+		{math.Inf(1), "invalid request body: k is out of range"},
+		{math.Inf(-1), "invalid request body: k is out of range"},
+	}
+	for _, tt := range tests {
+		if _, err := (commandArgs{"k": tt.v}).enumArg("k", 3); err == nil || err.Error() != tt.want {
+			t.Errorf("enumArg(%v) error = %v, want %q", tt.v, err, tt.want)
+		}
 	}
 }
 
@@ -439,6 +581,7 @@ func TestFleetCommandNamesFloor(t *testing.T) {
 		"charge_start", "charge_stop", "door_lock", "door_unlock", "flash_lights", "honk_horn",
 		"set_charge_limit", "set_charging_amps", "set_sentry_mode", "wake_up",
 		"set_preconditioning_max", "set_temps",
+		"set_climate_keeper_mode", "set_cabin_overheat_protection", "set_cop_temp", "set_bioweapon_mode",
 	}
 	names := FleetCommandNames()
 	for _, name := range floor {

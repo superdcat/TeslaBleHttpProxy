@@ -171,6 +171,10 @@ The program uses the same interfaces as the Tesla [Fleet API](https://developer.
 - set_sentry_mode
 - set_temps (superdcat fork)
 - set_preconditioning_max (superdcat fork)
+- set_climate_keeper_mode (superdcat fork)
+- set_cabin_overheat_protection (superdcat fork)
+- set_cop_temp (superdcat fork)
+- set_bioweapon_mode (superdcat fork)
 
 By default, the program will return immediately after sending the command to the vehicle. If you want to wait for the command to complete, you can set the `wait` parameter to `true`.
 
@@ -204,6 +208,28 @@ Start or stop maximum preconditioning (superdcat fork):
 `http://localhost:8080/api/1/vehicles/{VIN}/command/set_preconditioning_max` with body `{"on": true}`
 
 `on` is required; `manual_override` is optional and defaults to `false`.
+
+Set the climate keeper mode, dog or camp mode (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/set_climate_keeper_mode` with body `{"climate_keeper_mode": 2}`
+
+`climate_keeper_mode` is required: 0 off, 1 on, 2 dog, 3 camp (an integer or an integer string; fractions and other values are refused with HTTP 503 before the command is queued). `manual_override` is ignored by this command: the proxy always sends `true`.
+
+Enable or disable cabin overheat protection (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/set_cabin_overheat_protection` with body `{"on": true, "fan_only": false}`
+
+`on` is required; `fan_only` is optional and defaults to `false`.
+
+Set the cabin overheat protection temperature (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/set_cop_temp` with body `{"cop_temp": 1}`
+
+`cop_temp` is required: 0 = 30 C (90 F), 1 = 35 C (95 F), 2 = 40 C (100 F), as documented in the Tesla [Fleet API](https://developer.tesla.com/docs/fleet-api/endpoints/vehicle-commands) (`set_cop_temp`). This command only sets the threshold; it does not turn the protection on (use `set_cabin_overheat_protection`).
+
+Enable or disable bioweapon defense mode (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/set_bioweapon_mode` with body `{"on": true}`
+
+`on` is required; `manual_override` is optional and defaults to `false`.
+
+These four commands are expected to need the Owner role (a Charging Manager key should be refused by the vehicle).
 
 ### Vehicle Data
 

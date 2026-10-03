@@ -134,6 +134,27 @@ func TestCommandRoute(t *testing.T) {
 			envelope(true, received, "set_preconditioning_max"),
 			[]queuedCommand{{"set_preconditioning_max", map[string]interface{}{"on": true}, false}}},
 
+		// UC1011 AC2: climate modes refused before queuing, whatever wait is; valid bodies queued unchanged.
+		{"keeper 4", "set_climate_keeper_mode", "", `{"climate_keeper_mode":4}`, nil, 503,
+			envelope(false, "invalid request body: climate_keeper_mode must be an integer between 0 and 3", "set_climate_keeper_mode"), nil},
+		{"keeper -1 wait=true", "set_climate_keeper_mode", "?wait=true", `{"climate_keeper_mode":-1}`, nil, 503,
+			envelope(false, "invalid request body: climate_keeper_mode must be an integer between 0 and 3", "set_climate_keeper_mode"), nil},
+		{"keeper as string queued unchanged", "set_climate_keeper_mode", "", `{"climate_keeper_mode":"2"}`, nil, 200,
+			envelope(true, received, "set_climate_keeper_mode"),
+			[]queuedCommand{{"set_climate_keeper_mode", map[string]interface{}{"climate_keeper_mode": "2"}, false}}},
+		{"cop_temp 3", "set_cop_temp", "", `{"cop_temp":3}`, nil, 503,
+			envelope(false, "invalid request body: cop_temp must be an integer between 0 and 2", "set_cop_temp"), nil},
+		{"overheat fan_only without on", "set_cabin_overheat_protection", "", `{"fan_only":true}`, nil, 503,
+			envelope(false, "invalid request body: on missing", "set_cabin_overheat_protection"), nil},
+		{"overheat queued unchanged", "set_cabin_overheat_protection", "", `{"on":true}`, nil, 200,
+			envelope(true, received, "set_cabin_overheat_protection"),
+			[]queuedCommand{{"set_cabin_overheat_protection", map[string]interface{}{"on": true}, false}}},
+		{"bioweapon empty object", "set_bioweapon_mode", "", `{}`, nil, 503,
+			envelope(false, "invalid request body: on missing", "set_bioweapon_mode"), nil},
+		{"bioweapon off queued unchanged", "set_bioweapon_mode", "", `{"on":false}`, nil, 200,
+			envelope(true, received, "set_bioweapon_mode"),
+			[]queuedCommand{{"set_bioweapon_mode", map[string]interface{}{"on": false}, false}}},
+
 		// AC7: unchanged 2.3.0 answers.
 		{"unsupported command", "x", "", `{}`, nil, 503, envelope(false, `The command \"x\" is not supported.`, "x"), nil},
 		{"wait=true success", "set_charging_amps", "?wait=true", `{"charging_amps":16}`, succeed, 200, envelope(true, processed, "set_charging_amps"),
