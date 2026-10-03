@@ -11,6 +11,9 @@ on:
   workflow_call:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build
@@ -25,8 +28,25 @@ jobs:
         cache: false
         id: go
 
+    - name: Check formatting
+      run: |
+        unformatted="$(gofmt -l .)"
+        if [ -n "$unformatted" ]; then echo "Files not formatted with gofmt:"; echo "$unformatted"; exit 1; fi
+
+    - name: Vet
+      run: go vet ./...
+
+    - name: Test
+      run: go test ./...
+
     - name: Build
       run: make build
+
+    - name: Cross-build linux/arm64
+      run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null .
+
+    - name: Cross-build linux/arm/v6
+      run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -o /dev/null .
 
   lint:
     name: Lint
@@ -44,5 +64,5 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.14.0
           args: --timeout 3m

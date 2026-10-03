@@ -1,12 +1,12 @@
 name: Claude PR Review
 
-# pull_request_target runs the workflow file from the base branch with access to
-# secrets, so PRs from forks are reviewed too. The PR code is never checked out
-# or executed: Claude reads the diff via `gh pr diff` and only the base branch
-# is on disk (to compare the change against the existing behaviour).
+# Manual only until CLAUDE_CODE_OAUTH_TOKEN is configured in this fork: the
+# automatic pull_request_target trigger is disabled so that PRs do not fail for
+# lack of the secret. Run it from the Actions tab with the PR number.
+# The PR code is never checked out or executed: Claude reads the diff via
+# `gh pr diff` and only the base branch is on disk (to compare the change
+# against the existing behaviour).
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:

@@ -1,0 +1,15 @@
+TeslaBleHttpProxy - superdcat fork
+https://github.com/superdcat/TeslaBleHttpProxy
+
+This product is a fork of TeslaBleHttpProxy by wimaha
+(https://github.com/wimaha/TeslaBleHttpProxy).
+Copyright 2025 wimaha and contributors. Licensed under the Apache License, Version 2.0.
+
+Portions are derived from Lenart12/TeslaBleHttpProxy
+(https://github.com/Lenart12/TeslaBleHttpProxy).
+Copyright Lenart12 and contributors. Licensed under the Apache License, Version 2.0.
+Ported changes so far: redirect of / to /dashboard (commit 39f5307). Each ported change
+references the original Lenart12 commit in its commit message.
+
+Changes made in this fork are recorded in the git history of this repository.
+See LICENSE for the full license text.
