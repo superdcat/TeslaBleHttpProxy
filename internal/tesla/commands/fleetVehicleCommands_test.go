@@ -306,3 +306,49 @@ func TestAlreadyDoneErrorsAreSuccess(t *testing.T) {
 		})
 	}
 }
+
+func TestFleetCommandNamesAreTheRegistry(t *testing.T) {
+	names := FleetCommandNames()
+
+	if want := slices.Sorted(maps.Keys(fleetVehicleCommands)); !slices.Equal(names, want) {
+		t.Fatalf("FleetCommandNames() = %v, want %v", names, want)
+	}
+	if !slices.IsSorted(names) {
+		t.Errorf("names are not sorted: %v", names)
+	}
+	if len(slices.Compact(slices.Clone(names))) != len(names) {
+		t.Errorf("names contain duplicates: %v", names)
+	}
+	for _, name := range names {
+		if fleetVehicleCommands[name].execute == nil {
+			t.Errorf("command %q has no execute function", name)
+		}
+		if !IsSupportedCommand(name) {
+			t.Errorf("command %q is announced but not supported", name)
+		}
+		if slices.Contains(legacyRouteCommands, name) {
+			t.Errorf("legacy route command %q must not be announced", name)
+		}
+	}
+
+	// The result is a fresh copy.
+	names[0] = "changed"
+	if again := FleetCommandNames(); again[0] == "changed" {
+		t.Errorf("modifying the returned slice altered the next call")
+	}
+}
+
+// The API only grows: removing one of these commands must be a deliberate change of this test.
+func TestFleetCommandNamesFloor(t *testing.T) {
+	floor := []string{
+		"auto_conditioning_start", "auto_conditioning_stop", "charge_port_door_close", "charge_port_door_open",
+		"charge_start", "charge_stop", "door_lock", "door_unlock", "flash_lights", "honk_horn",
+		"set_charge_limit", "set_charging_amps", "set_sentry_mode", "wake_up",
+	}
+	names := FleetCommandNames()
+	for _, name := range floor {
+		if !slices.Contains(names, name) {
+			t.Errorf("command %q is missing from FleetCommandNames()", name)
+		}
+	}
+}

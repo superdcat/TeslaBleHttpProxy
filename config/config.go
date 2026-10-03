@@ -86,6 +86,9 @@ func GetKeyFilesForRole(role string) (string, string) {
 // Version is set at build time via linker flags
 var Version = "*undefined*"
 
+// Flavor identifies the fork in the version and capabilities routes.
+const Flavor = "superdcat"
+
 type Config struct {
 	LogLevel             string
 	HttpListenAddress    string

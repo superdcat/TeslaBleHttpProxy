@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/teslamotors/vehicle-command/pkg/protocol"
+	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
 	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/keys"
 	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/vcsec"
 	"github.com/teslamotors/vehicle-command/pkg/vehicle"
@@ -20,6 +22,26 @@ import (
 // them in its switch and they take no validated body.
 var legacyRouteCommands = []string{"vehicle_data", "session_info"}
 var ExceptedEndpoints = []string{"charge_state", "climate_state"}
+
+// VehicleDataEndpointNames returns the sorted names of the vehicle_data endpoints served by the
+// proxy. The slice is a fresh copy.
+func VehicleDataEndpointNames() []string {
+	names := slices.Clone(ExceptedEndpoints)
+	slices.Sort(names)
+	return names
+}
+
+// convertVehicleData converts the BLE vehicle data of an endpoint to its API model.
+// It reports false (and returns nil) for an endpoint without converter.
+func convertVehicleData(endpoint string, data *carserver.VehicleData) (interface{}, bool) {
+	switch endpoint {
+	case "charge_state":
+		return models.ChargeStateFromBle(data), true
+	case "climate_state":
+		return models.ClimateStateFromBle(data), true
+	}
+	return nil, false
+}
 
 func (command *Command) Send(ctx context.Context, car *vehicle.Vehicle) (shouldRetry bool, err error) {
 	if handler, ok := fleetVehicleCommands[command.Command]; ok {
@@ -131,13 +153,7 @@ func (command *Command) Send(ctx context.Context, car *vehicle.Vehicle) (shouldR
 			}
 			logging.Debugf("data: %s", d)*/
 
-			var converted interface{}
-			switch endpoint {
-			case "charge_state":
-				converted = models.ChargeStateFromBle(data)
-			case "climate_state":
-				converted = models.ClimateStateFromBle(data)
-			}
+			converted, _ := convertVehicleData(endpoint, data) // nil (JSON null) without converter, as in 2.3.0
 			d, err := json.Marshal(converted)
 			if err != nil {
 				return true, fmt.Errorf("Failed to marshal vehicle data: %s", err)

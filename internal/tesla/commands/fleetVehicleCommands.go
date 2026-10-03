@@ -221,6 +221,17 @@ func IsSupportedCommand(name string) bool {
 	return slices.Contains(legacyRouteCommands, name)
 }
 
+// FleetCommandNames returns the sorted names of the Fleet vehicle commands of the registry
+// (the legacy route commands are not included). The slice is a fresh copy.
+func FleetCommandNames() []string {
+	names := make([]string, 0, len(fleetVehicleCommands))
+	for name := range fleetVehicleCommands {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
 // ValidateCommandBody checks the body of a registry command before it is queued.
 // Commands without body and commands outside the registry always pass.
 func ValidateCommandBody(name string, body map[string]interface{}) error {

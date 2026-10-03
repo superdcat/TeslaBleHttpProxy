@@ -2,9 +2,13 @@ package routes
 
 import (
 	"embed"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -62,9 +66,22 @@ func TestVersionRouteServesInjectedVersion(t *testing.T) {
 			}
 
 			want := `{"response":{"result":true,"reason":"The request was successfully processed.","vin":"","command":"","response":{"version":"` +
-				tt.version + `"}}}` + "\n"
+				tt.version + `","flavor":"superdcat"}}}` + "\n"
 			if got := rec.Body.String(); got != want {
 				t.Errorf("body mismatch\n got: %q\nwant: %q", got, want)
+			}
+
+			// Existing clients decode the "version" field only.
+			var ret struct {
+				Response struct {
+					Response struct{ Version string } `json:"response"`
+				} `json:"response"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &ret); err != nil {
+				t.Fatalf("invalid JSON: %v", err)
+			}
+			if got := ret.Response.Response.Version; got != tt.version {
+				t.Errorf("decoded version %q, want %q", got, tt.version)
 			}
 		})
 	}
@@ -86,6 +103,7 @@ func TestFrozenRoutesRegistered(t *testing.T) {
 		{http.MethodGet, "/api/1/vehicles/VIN/vehicle_data", true, nil},
 		{http.MethodGet, "/api/1/vehicles/VIN/body_controller_state", true, nil},
 		{http.MethodGet, "/api/proxy/1/version", true, nil},
+		{http.MethodGet, "/api/proxy/1/capabilities", true, nil},
 		{http.MethodGet, "/dashboard", true, nil},
 		{http.MethodGet, "/logs", true, nil},
 		{http.MethodGet, "/api/logs", true, nil},
@@ -99,6 +117,8 @@ func TestFrozenRoutesRegistered(t *testing.T) {
 		{http.MethodGet, "/send_key", false, mux.ErrMethodMismatch},
 		{http.MethodPost, "/dashboard", false, mux.ErrMethodMismatch},
 		{http.MethodPost, "/api/proxy/1/version", false, mux.ErrMethodMismatch},
+		{http.MethodPost, "/api/proxy/1/capabilities", false, mux.ErrMethodMismatch},
+		{http.MethodHead, "/api/proxy/1/capabilities", false, mux.ErrMethodMismatch},
 	}
 
 	for _, tt := range tests {
@@ -123,5 +143,62 @@ func TestFrozenRoutesRegistered(t *testing.T) {
 				t.Errorf("%s %s match error: %v", tt.method, tt.path, match.MatchErr)
 			}
 		})
+	}
+}
+
+func TestCapabilitiesRouteListsProxyRoutes(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	rec := httptest.NewRecorder()
+	newTestRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/proxy/1/capabilities", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var ret struct {
+		Response struct {
+			Response struct {
+				API         int      `json:"api"`
+				ProxyRoutes []string `json:"proxy_routes"`
+			} `json:"response"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ret); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if want := fmt.Sprintf("/api/proxy/%d/", ret.Response.Response.API); proxyRoutePrefix != want {
+		t.Errorf("proxyRoutePrefix = %q, want %q (from api field)", proxyRoutePrefix, want)
+	}
+
+	// UC1020 will add "connection_status".
+	want := []string{"capabilities", "version"}
+	if got := ret.Response.Response.ProxyRoutes; !slices.Equal(got, want) {
+		t.Errorf("proxy_routes = %v, want %v", got, want)
+	}
+	for _, name := range ret.Response.Response.ProxyRoutes {
+		if strings.Contains(name, "{") {
+			t.Errorf("proxy route %q is not a literal segment", name)
+		}
+	}
+}
+
+func TestProxyRouteNames(t *testing.T) {
+	ok := func(http.ResponseWriter, *http.Request) {}
+	router := mux.NewRouter()
+	router.HandleFunc("/api/proxy/1/version", ok).Methods("GET")
+	router.HandleFunc("/api/proxy/1/vehicles/{vin}/connection_status", ok).Methods("GET")
+	router.HandleFunc("/api/proxy/1/vehicles/{vin}/connection_status", ok).Methods("POST")
+	router.HandleFunc("/api/1/vehicles/{vin}/vehicle_data", ok).Methods("GET")
+	router.PathPrefix("/static/").HandlerFunc(ok)
+	router.HandleFunc("/", ok)
+	router.NewRoute().HandlerFunc(ok) // route without path
+
+	want := []string{"connection_status", "version"}
+	if got := proxyRouteNames(router); !slices.Equal(got, want) {
+		t.Errorf("proxyRouteNames() = %v, want %v", got, want)
+	}
+	if got := proxyRouteNames(mux.NewRouter()); got == nil || len(got) != 0 {
+		t.Errorf("empty router: got %#v, want empty non-nil slice", got)
 	}
 }

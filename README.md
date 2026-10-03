@@ -16,6 +16,7 @@ The program stores the received requests in a queue and processes them one by on
   - [Vehicle Data](#vehicle-data)
   - [Body Controller State](#body-controller-state)
   - [Version of Proxy](#version-of-proxy)
+  - [Capabilities of Proxy (superdcat fork)](#capabilities-of-proxy-superdcat-fork)
 - [Troubleshooting](#troubleshooting)
 
 ## How to install
@@ -231,7 +232,24 @@ Get body controller state:
 Get version of proxy:
 `http://localhost:8080/api/proxy/1/version`
 
-The response will contain the version of the proxy.
+The response will contain the version of the proxy (`version`) and, in this fork, the `flavor` (`superdcat`).
+
+### Capabilities of Proxy (superdcat fork)
+
+Get what this proxy supports:
+`http://localhost:8080/api/proxy/1/capabilities`
+
+The route answers without a vehicle, without Bluetooth and without an installed key. The `response` object contains:
+
+- `api`: version of the `/api/proxy/1/` routes (stays 1 while changes only add things).
+- `version`, `flavor`: as in the version route.
+- `commands`: the Fleet vehicle commands supported by the proxy (the legacy route commands `vehicle_data` and `session_info` are not listed).
+- `vehicle_data_endpoints`: the endpoints accepted by `vehicle_data`.
+- `proxy_routes`: the proxy-specific routes under `/api/proxy/1/` (last path segment).
+- `features`: `strict_body_validation`, `body_controller_state_queued`, `auth_required`.
+- `key_role`: role of the active key (`owner` or `charging_manager`), or an empty string when no key is installed for it.
+
+The lists are sorted but must be read as sets (the order is not part of the contract). The wimaha and Lenart12 proxies answer 404 on this route.
 
 ## Troubleshooting
 

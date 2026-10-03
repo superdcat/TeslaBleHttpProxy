@@ -8,12 +8,14 @@ import (
 	"github.com/wimaha/TeslaBleHttpProxy/internal/api/models"
 )
 
-func Version(w http.ResponseWriter, r *http.Request) {
-	versionData := map[string]string{
-		"version": config.Version,
-	}
+// versionResponse keeps "version" first (a map would sort "flavor" before it).
+type versionResponse struct {
+	Version string `json:"version"`
+	Flavor  string `json:"flavor"`
+}
 
-	versionJson, _ := json.Marshal(versionData)
+func Version(w http.ResponseWriter, r *http.Request) {
+	versionJson, _ := json.Marshal(versionResponse{Version: config.Version, Flavor: config.Flavor})
 
 	response := models.Ret{
 		Response: models.Response{

@@ -3,6 +3,9 @@ package routes
 import (
 	"embed"
 	"net/http"
+	"path"
+	"slices"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/wimaha/TeslaBleHttpProxy/internal/api/handlers"
@@ -17,6 +20,7 @@ func SetupRoutes(static embed.FS, html embed.FS) *mux.Router {
 	router.HandleFunc("/api/1/vehicles/{vin}/vehicle_data", handlers.VehicleData).Methods("GET")
 	router.HandleFunc("/api/1/vehicles/{vin}/body_controller_state", handlers.BodyControllerState).Methods("GET")
 	router.HandleFunc("/api/proxy/1/version", handlers.Version).Methods("GET")
+	router.HandleFunc("/api/proxy/1/capabilities", handlers.Capabilities(func() []string { return proxyRouteNames(router) })).Methods("GET")
 	router.HandleFunc("/dashboard", handlers.ShowDashboard(html)).Methods("GET")
 	router.HandleFunc("/logs", handlers.ShowLogViewer(html)).Methods("GET")
 	router.HandleFunc("/api/logs", handlers.GetLogs).Methods("GET")
@@ -33,4 +37,24 @@ func SetupRoutes(static embed.FS, html embed.FS) *mux.Router {
 	})
 
 	return router
+}
+
+// proxyRoutePrefix is the namespace of the proxy's own routes; keep it in line with
+// handlers.proxyAPIVersion (the "api" field of the capabilities).
+const proxyRoutePrefix = "/api/proxy/1/"
+
+// proxyRouteNames returns the sorted last path segments of the routes registered under
+// proxyRoutePrefix (e.g. "version"). Each such route must end with a unique literal segment.
+func proxyRouteNames(router *mux.Router) []string {
+	names := []string{}
+	_ = router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		template, err := route.GetPathTemplate()
+		if err != nil || !strings.HasPrefix(template, proxyRoutePrefix) || len(template) <= len(proxyRoutePrefix) {
+			return nil
+		}
+		names = append(names, path.Base(template))
+		return nil
+	})
+	slices.Sort(names)
+	return slices.Compact(names)
 }
