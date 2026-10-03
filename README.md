@@ -198,6 +198,8 @@ The program uses the same interfaces as the Tesla [Fleet API](https://developer.
 - remote_seat_cooler_request (superdcat fork)
 - remote_auto_seat_climate_request (superdcat fork)
 - remote_steering_wheel_heater_request (superdcat fork)
+- actuate_trunk (superdcat fork)
+- window_control (superdcat fork)
 
 By default, the program will return immediately after sending the command to the vehicle. If you want to wait for the command to complete, you can set the `wait` parameter to `true`.
 
@@ -273,6 +275,16 @@ Heat the steering wheel (superdcat fork):
 `http://localhost:8080/api/1/vehicles/{VIN}/command/remote_steering_wheel_heater_request` with body `{"on": true}`
 
 All the keys are required. The integer keys (`heater`, `level`, `seat_position`, `seat_cooler_level`, `auto_seat_position`) accept an integer or an integer string (`2.0` is accepted); fractions and out-of-range values are refused with HTTP 503 before the command is queued. `auto_climate_on` and `on` accept a boolean or `"true"`/`"false"`. There is no alias: `remote_seat_heater_request` does not read `seat_position`. The climate must be on, as documented by the Fleet API. Seats of the third row and the second row backrests only exist on equipped models; otherwise the vehicle refuses the command. These commands are expected to need the Owner role (a Charging Manager key should be refused by the vehicle).
+
+Open the rear trunk or the frunk (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/actuate_trunk` with body `{"which_trunk": "rear"}` or `{"which_trunk": "front"}`
+
+`which_trunk` is required (there is no default: an empty body is refused with HTTP 503 before the command is queued). `rear` **toggles** the trunk: it opens a closed trunk and closes an open power trunk, so read `body_controller_state` (`closure_statuses.rear_trunk`) before sending it again. A failure of `rear` is **never retried** (a retry after a lost reply would undo the opening) and may close the BLE connection (the next command then reconnects, which takes a few seconds); with `wait=false` no error is reported at all, so do not resend blindly. `front` opens the frunk; there is no remote way to close it, and it keeps the 3 attempts of the other commands.
+
+Vent or close the windows (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/window_control` with body `{"command": "vent"}` or `{"command": "close"}`
+
+`command` is required. `lat` and `lon` (degrees, `lat` -90 to 90, `lon` -180 to 180) are accepted for compatibility with the Fleet API and validated, but **not sent** to the vehicle, which needs no position over BLE: omit them. A request body is logged by the proxy, so avoid sending coordinates. These two commands wake the vehicle up like the others, are expected to need the Owner role (a Charging Manager key should be refused by the vehicle), and open the vehicle to anyone who can reach the proxy: set an `apiToken`. Values of `which_trunk` and `command` are case-insensitive and surrounding spaces are ignored; anything else is refused with HTTP 503.
 
 ### Vehicle Data
 

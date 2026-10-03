@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,4 +359,35 @@ func TestClosedPipeInOperatedConnectionReleasesHandler(t *testing.T) {
 		t.Errorf("sends = %v, want [flash_lights door_lock] (no retry)", fake.sends)
 	}
 	assertFinished(t, waiting, "write: closed pipe")
+}
+
+// UC1013: a command reporting retry=false (actuate_trunk rear, a toggle) is sent exactly once,
+// even when its error reads "closed pipe": the not-retried check precedes the requeue on a
+// closed pipe, so the command is neither retried nor handed back.
+func TestExecuteCommandSendsNotRetriedErrorOnce(t *testing.T) {
+	fake := useFakeVehicle(t)
+	fake.send = func(context.Context) (bool, error) {
+		return false, errors.New("failed to actuate trunk (not retried, it is a toggle): io: read/write on closed pipe")
+	}
+	response := models.NewApiResponse(context.Background())
+	command := &commands.Command{Command: "actuate_trunk", Vin: testVIN, Body: map[string]interface{}{"which_trunk": "rear"}, Response: response}
+
+	start := time.Now()
+	retryCommand, err, _ := (&BleControl{}).ExecuteCommand(nil, command, context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), "closed pipe") {
+		t.Errorf("ExecuteCommand error = %v, want the closed pipe error", err)
+	}
+	if retryCommand != nil {
+		t.Errorf("ExecuteCommand hands %q back for a new connection", retryCommand.Command)
+	}
+	if command.SendAttempts != 1 || len(fake.sends) != 1 {
+		t.Errorf("SendAttempts = %d, sends = %v, want exactly one", command.SendAttempts, fake.sends)
+	}
+	if response.Result || response.Error != err.Error() {
+		t.Errorf("response = (Result %t, Error %q), want (false, %q)", response.Result, response.Error, err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %s, a non-retried failure must be immediate", elapsed)
+	}
 }

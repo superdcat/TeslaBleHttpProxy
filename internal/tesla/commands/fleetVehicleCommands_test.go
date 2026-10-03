@@ -100,6 +100,10 @@ func (f *fakeCar) AutoSeatAndClimate(_ context.Context, positions []vehicle.Seat
 func (f *fakeCar) SetSteeringWheelHeater(_ context.Context, on bool) error {
 	return f.record(fmt.Sprintf("SetSteeringWheelHeater(%t)", on))
 }
+func (f *fakeCar) OpenFrunk(context.Context) error    { return f.record("OpenFrunk") }
+func (f *fakeCar) ActuateTrunk(context.Context) error { return f.record("ActuateTrunk") }
+func (f *fakeCar) VentWindows(context.Context) error  { return f.record("VentWindows") }
+func (f *fakeCar) CloseWindows(context.Context) error { return f.record("CloseWindows") }
 
 // sdkSeatName names an SDK seat constant by hand (the SDK has no String()).
 func sdkSeatName(seat vehicle.SeatPosition) string {
@@ -471,6 +475,47 @@ func TestCommandBodies(t *testing.T) {
 		{"remote_steering_wheel_heater_request", `{}`, "", "invalid request body: on missing"},
 		{"remote_steering_wheel_heater_request", `{"on":"yes"}`, "", "invalid request body: on is not a valid boolean"},
 		{"remote_steering_wheel_heater_request", `{"on":1}`, "", `invalid request body: on must be a boolean or "true"/"false"`},
+
+		// actuate_trunk (UC1013): which_trunk required, "rear" or "front", case and spaces tolerated.
+		{"actuate_trunk", `{"which_trunk":"rear"}`, "ActuateTrunk", ""},
+		{"actuate_trunk", `{"which_trunk":"front"}`, "OpenFrunk", ""},
+		{"actuate_trunk", `{"which_trunk":" REAR "}`, "ActuateTrunk", ""},
+		{"actuate_trunk", `{"which_trunk":"Front"}`, "OpenFrunk", ""},
+		{"actuate_trunk", `{"which_trunk":"rear","extra":1}`, "ActuateTrunk", ""},
+		{"actuate_trunk", ``, "", "invalid request body: which_trunk missing"},
+		{"actuate_trunk", `{}`, "", "invalid request body: which_trunk missing"},
+		{"actuate_trunk", `{"which_trunk":null}`, "", "invalid request body: which_trunk missing"},
+		{"actuate_trunk", `{"which_trunk":"side"}`, "", `invalid request body: which_trunk must be "rear" or "front"`},
+		{"actuate_trunk", `{"which_trunk":""}`, "", `invalid request body: which_trunk must be "rear" or "front"`},
+		{"actuate_trunk", `{"which_trunk":"re ar"}`, "", `invalid request body: which_trunk must be "rear" or "front"`},
+		{"actuate_trunk", `{"which_trunk":1}`, "", "invalid request body: which_trunk must be a string"},
+		{"actuate_trunk", `{"which_trunk":true}`, "", "invalid request body: which_trunk must be a string"},
+		{"actuate_trunk", `{"which_trunk":["rear"]}`, "", "invalid request body: which_trunk must be a string"},
+
+		// window_control (UC1013): command required, lat and lon optional, bounded, never sent.
+		{"window_control", `{"command":"vent"}`, "VentWindows", ""},
+		{"window_control", `{"command":"close"}`, "CloseWindows", ""},
+		{"window_control", `{"command":"close","lat":48.8566,"lon":2.3522}`, "CloseWindows", ""},
+		{"window_control", `{"command":"vent","lat":0,"lon":0}`, "VentWindows", ""},
+		{"window_control", `{"command":"close","lat":"-90","lon":"180"}`, "CloseWindows", ""},
+		{"window_control", `{"command":"close","lat":90,"lon":-180}`, "CloseWindows", ""},
+		{"window_control", `{"command":"vent","lat":12.5}`, "VentWindows", ""},
+		{"window_control", `{"command":"vent","lat":null,"lon":null}`, "VentWindows", ""},
+		{"window_control", `{"command":" CLOSE "}`, "CloseWindows", ""},
+		{"window_control", ``, "", "invalid request body: command missing"},
+		{"window_control", `{"lat":91}`, "", "invalid request body: command missing"},
+		{"window_control", `{"command":"open"}`, "", `invalid request body: command must be "vent" or "close"`},
+		{"window_control", `{"command":"open","lat":91}`, "", `invalid request body: command must be "vent" or "close"`},
+		{"window_control", `{"command":1}`, "", "invalid request body: command must be a string"},
+		{"window_control", `{"command":"vent","lat":90.5}`, "", "invalid request body: lat must be between -90 and 90 degrees"},
+		{"window_control", `{"command":"vent","lat":-91}`, "", "invalid request body: lat must be between -90 and 90 degrees"},
+		{"window_control", `{"command":"vent","lat":"91"}`, "", "invalid request body: lat must be between -90 and 90 degrees"},
+		{"window_control", `{"command":"vent","lon":180.1}`, "", "invalid request body: lon must be between -180 and 180 degrees"},
+		{"window_control", `{"command":"vent","lon":-181}`, "", "invalid request body: lon must be between -180 and 180 degrees"},
+		{"window_control", `{"command":"vent","lat":91,"lon":181}`, "", "invalid request body: lat must be between -90 and 90 degrees"},
+		{"window_control", `{"command":"vent","lat":"abc"}`, "", "invalid request body: lat is not a valid number"},
+		{"window_control", `{"command":"vent","lat":true}`, "", "invalid request body: lat must be a number or a numeric string"},
+		{"window_control", `{"command":"vent","lon":"1e999"}`, "", "invalid request body: lon is out of range"},
 	}
 
 	covered := map[string]bool{}
@@ -572,6 +617,9 @@ func TestAddedCommandsVehicleErrors(t *testing.T) {
 		{"remote_seat_cooler_request", `{"seat_position":2,"seat_cooler_level":"3"}`, "failed to set seat cooler at seat_position 2 to level 3: " + vehicleFault},
 		{"remote_auto_seat_climate_request", `{"auto_seat_position":1,"auto_climate_on":true}`, "failed to set auto seat climate at auto_seat_position 1: " + vehicleFault},
 		{"remote_steering_wheel_heater_request", `{"on":true}`, "failed to set steering wheel heater: " + vehicleFault},
+		{"actuate_trunk", `{"which_trunk":"front"}`, "failed to open frunk: " + vehicleFault},
+		{"window_control", `{"command":"vent"}`, "failed to vent windows: " + vehicleFault},
+		{"window_control", `{"command":"close","lat":1,"lon":2}`, "failed to close windows: " + vehicleFault},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command+" "+tt.body, func(t *testing.T) { assertVehicleError(t, tt.command, tt.body, tt.want) })
@@ -825,11 +873,145 @@ func TestFleetCommandNamesFloor(t *testing.T) {
 		"set_preconditioning_max", "set_temps",
 		"set_climate_keeper_mode", "set_cabin_overheat_protection", "set_cop_temp", "set_bioweapon_mode",
 		"remote_seat_heater_request", "remote_seat_cooler_request", "remote_auto_seat_climate_request", "remote_steering_wheel_heater_request",
+		"actuate_trunk", "window_control",
 	}
 	names := FleetCommandNames()
+	if len(names) < 26 {
+		t.Errorf("FleetCommandNames() has %d names, want at least 26", len(names))
+	}
 	for _, name := range floor {
 		if !slices.Contains(names, name) {
 			t.Errorf("command %q is missing from FleetCommandNames()", name)
 		}
+	}
+}
+
+// UC1013: actuate_trunk toggles, so a rear failure is not retried; front and the idempotent
+// commands keep the retries. Only actuate_trunk carries notRetried.
+func TestToggleVehicleErrorNotRetried(t *testing.T) {
+	for name, handler := range fleetVehicleCommands {
+		if (handler.notRetried != nil) != (name == "actuate_trunk") {
+			t.Errorf("command %q: notRetried set = %t", name, handler.notRetried != nil)
+		}
+	}
+	tests := []struct {
+		body      string
+		wantRetry bool
+		want      string
+	}{
+		{`{"which_trunk":"rear"}`, false, "failed to actuate trunk (not retried, it is a toggle): " + vehicleFault},
+		{`{"which_trunk":" Rear "}`, false, "failed to actuate trunk (not retried, it is a toggle): " + vehicleFault},
+		{`{"which_trunk":"front"}`, true, "failed to open frunk: " + vehicleFault},
+	}
+	for _, tt := range tests {
+		t.Run(tt.body, func(t *testing.T) {
+			sdkErr := &protocol.RoutableMessageError{Code: universalmessage.MessageFault_E_MESSAGEFAULT_ERROR_INSUFFICIENT_PRIVILEGES}
+			car := &fakeCar{err: sdkErr}
+			retry, err := fleetVehicleCommands["actuate_trunk"].run(context.Background(), car, decodeBody(t, tt.body))
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("run error = %v, want %q", err, tt.want)
+			}
+			if retry != tt.wantRetry {
+				t.Errorf("retry = %t, want %t", retry, tt.wantRetry)
+			}
+			var routable *protocol.RoutableMessageError
+			if !errors.As(err, &routable) {
+				t.Errorf("run error %v does not wrap the SDK error", err)
+			}
+			if len(car.calls) != 1 {
+				t.Errorf("vehicle calls = %v, want exactly one", car.calls)
+			}
+		})
+	}
+}
+
+// The predicate is fail-safe: anything but "front" counts as a toggle.
+func TestActuateTrunkNotRetriedPredicate(t *testing.T) {
+	notRetried := fleetVehicleCommands["actuate_trunk"].notRetried
+	tests := []struct {
+		args commandArgs
+		want bool
+	}{
+		{commandArgs{"which_trunk": "rear"}, true},
+		{commandArgs{"which_trunk": "front"}, false},
+		{commandArgs{"which_trunk": " FRONT "}, false},
+		{commandArgs{"which_trunk": "side"}, true},
+		{commandArgs{}, true},
+		{nil, true},
+	}
+	for _, tt := range tests {
+		if got := notRetried(tt.args); got != tt.want {
+			t.Errorf("notRetried(%v) = %t, want %t", tt.args, got, tt.want)
+		}
+	}
+}
+
+func TestChoiceArg(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   commandArgs
+		want   string
+		reason string
+	}{
+		{"canonical", commandArgs{"k": "rear"}, "rear", ""},
+		{"normalized", commandArgs{"k": "\t Front \n"}, "front", ""},
+		{"absent", commandArgs{}, "", "k missing"},
+		{"null", commandArgs{"k": nil}, "", "k missing"},
+		{"number", commandArgs{"k": 1.0}, "", "k must be a string"},
+		{"bool", commandArgs{"k": true}, "", "k must be a string"},
+		{"empty", commandArgs{"k": ""}, "", `k must be "rear" or "front"`},
+		{"unknown", commandArgs{"k": "side"}, "", `k must be "rear" or "front"`},
+		{"long s is not folded", commandArgs{"k": "frontſ"}, "", `k must be "rear" or "front"`},
+		{"kelvin sign is not folded", commandArgs{"k": "Kear"}, "", `k must be "rear" or "front"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.args.choiceArg("k", trunkChoices...)
+			if tt.reason == "" {
+				if err != nil || got != tt.want {
+					t.Errorf("choiceArg = %q, %v, want %q", got, err, tt.want)
+				}
+				return
+			}
+			if err == nil || err.Error() != "invalid request body: "+tt.reason || !errors.Is(err, ErrInvalidBody) {
+				t.Errorf("choiceArg error = %v, want %q", err, tt.reason)
+			}
+		})
+	}
+}
+
+func TestOptCoordinateArg(t *testing.T) {
+	tests := []struct {
+		name   string
+		v      interface{}
+		limit  int
+		reason string
+	}{
+		{"absent", nil, 90, ""},
+		{"zero", 0.0, 90, ""},
+		{"upper bound", 90.0, 90, ""},
+		{"lower bound", -90.0, 90, ""},
+		{"string bound", "180", 180, ""},
+		{"above", 90.0000001, 90, "k must be between -90 and 90 degrees"},
+		{"below", -180.5, 180, "k must be between -180 and 180 degrees"},
+		{"string above", "91", 90, "k must be between -90 and 90 degrees"},
+		{"NaN", math.NaN(), 90, "k is not a valid number"},
+		{"+Inf", math.Inf(1), 90, "k is not a valid number"},
+		{"-Inf", math.Inf(-1), 90, "k is not a valid number"},
+		{"bool", true, 90, "k must be a number or a numeric string"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (commandArgs{"k": tt.v}).optCoordinateArg("k", tt.limit)
+			if tt.reason == "" {
+				if err != nil {
+					t.Errorf("optCoordinateArg error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != "invalid request body: "+tt.reason {
+				t.Errorf("optCoordinateArg error = %v, want %q", err, tt.reason)
+			}
+		})
 	}
 }

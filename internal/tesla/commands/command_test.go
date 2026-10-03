@@ -49,6 +49,8 @@ func TestCommandDomain(t *testing.T) {
 		{BodyControllerStateCommand, Domain.VCSEC},
 		{"wake_up", Domain.None},
 		{"door_lock", Domain.None},
+		{"actuate_trunk", Domain.None},
+		{"window_control", Domain.None},
 		{"vehicle_data", Domain.None},
 		{"session_info", Domain.None},
 		{"body_controller_state", Domain.None},

@@ -19,6 +19,7 @@ commands set_climate_keeper_mode, set_cabin_overheat_protection, set_cop_temp an
 set_bioweapon_mode, adapted (commit 94d1fd8); seat heater, seat cooler, auto seat climate and
 steering wheel heater commands remote_seat_heater_request, remote_seat_cooler_request,
 remote_auto_seat_climate_request and remote_steering_wheel_heater_request, adapted
+(commit 94d1fd8); trunk and window commands actuate_trunk and window_control, adapted
 (commit 94d1fd8). Each ported change
 references the original Lenart12 commit in its commit message.
 

@@ -8,7 +8,8 @@
 // "true"/"false", decimals truncated), no value bounds on the wimaha 2.3.0 commands,
 // wimaha 2.3.0 error messages, validation without mutating the body, explicit Fleet seat
 // tables (Lenart12 shifted the seat heater by one), vehicle behind an interface for tests.
-// set_temps follows the contract of wimaha/TeslaBleHttpProxy PR #162.
+// set_temps follows the contract of wimaha/TeslaBleHttpProxy PR #162; actuate_trunk follows
+// the contract of wimaha PR #162 (rear not retried).
 
 package commands
 
@@ -55,6 +56,10 @@ type vehicleCommander interface {
 	SetSeatCooler(ctx context.Context, level vehicle.Level, seat vehicle.SeatPosition) error
 	AutoSeatAndClimate(ctx context.Context, positions []vehicle.SeatPosition, enabled bool) error
 	SetSteeringWheelHeater(ctx context.Context, enabled bool) error
+	OpenFrunk(ctx context.Context) error
+	ActuateTrunk(ctx context.Context) error
+	VentWindows(ctx context.Context) error
+	CloseWindows(ctx context.Context) error
 }
 
 // Bounds of the cabin temperature setpoints, in degrees Celsius, inclusive (wimaha PR #162).
@@ -108,6 +113,25 @@ const firstFrontSeat = 1
 // (commit 94d1fd8); a manual_override key in the body is not read.
 const climateKeeperManualOverride = true
 
+// Choices of actuate_trunk (which_trunk) and window_control (command), in the order of the messages.
+const (
+	trunkRear   = "rear"
+	trunkFront  = "front"
+	windowVent  = "vent"
+	windowClose = "close"
+)
+
+var (
+	trunkChoices  = []string{trunkRear, trunkFront}
+	windowChoices = []string{windowVent, windowClose}
+)
+
+// Bounds of the optional window_control coordinates, in degrees, inclusive.
+const (
+	maxLatitude  = 90
+	maxLongitude = 180
+)
+
 var _ vehicleCommander = (*vehicle.Vehicle)(nil)
 
 // commandArgs is the decoded JSON body of a command (nil when absent or unreadable).
@@ -123,6 +147,9 @@ type commandHandler struct {
 	execute func(ctx context.Context, car vehicleCommander, args commandArgs) error
 	// checkError turns a vehicle error meaning "already done" into success (nil). Optional.
 	checkError func(err error) error
+	// notRetried, when set and true for the body, reports a vehicle error without retry: the action
+	// toggles a state (actuate_trunk rear), a retry after a lost reply would undo it (wimaha PR #162).
+	notRetried func(args commandArgs) bool
 }
 
 var fleetVehicleCommands = map[string]commandHandler{
@@ -435,6 +462,64 @@ var fleetVehicleCommands = map[string]commandHandler{
 			return nil
 		},
 	},
+
+	// UC1013: trunk and window commands (ported from Lenart12, adapted; actuate_trunk follows wimaha PR #162).
+	"actuate_trunk": {
+		validate: func(args commandArgs) error {
+			_, err := args.choiceArg("which_trunk", trunkChoices...)
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			which, _ := args.choiceArg("which_trunk", trunkChoices...) // validated by run
+			switch which {
+			case trunkFront:
+				if err := car.OpenFrunk(ctx); err != nil {
+					return fmt.Errorf("failed to open frunk: %w", err)
+				}
+			case trunkRear:
+				// ActuateTrunk toggles: it opens a closed trunk and closes an open motorized one.
+				if err := car.ActuateTrunk(ctx); err != nil {
+					return fmt.Errorf("failed to actuate trunk (not retried, it is a toggle): %w", err)
+				}
+			default:
+				return fmt.Errorf("unexpected which_trunk %q", which)
+			}
+			return nil
+		},
+		// Fail-safe: anything but the frunk is treated as a toggle and never retried.
+		notRetried: func(args commandArgs) bool {
+			which, _ := args.choiceArg("which_trunk", trunkChoices...)
+			return which != trunkFront
+		},
+	},
+	"window_control": {
+		validate: func(args commandArgs) error {
+			if _, err := args.choiceArg("command", windowChoices...); err != nil {
+				return err
+			}
+			if err := args.optCoordinateArg("lat", maxLatitude); err != nil {
+				return err
+			}
+			return args.optCoordinateArg("lon", maxLongitude)
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			// lat and lon are validated but not sent: the SDK takes no position (BLE needs none).
+			command, _ := args.choiceArg("command", windowChoices...) // validated by run
+			switch command {
+			case windowVent:
+				if err := car.VentWindows(ctx); err != nil {
+					return fmt.Errorf("failed to vent windows: %w", err)
+				}
+			case windowClose:
+				if err := car.CloseWindows(ctx); err != nil {
+					return fmt.Errorf("failed to close windows: %w", err)
+				}
+			default:
+				return fmt.Errorf("unexpected window command %q", command)
+			}
+			return nil
+		},
+	},
 }
 
 // IsSupportedCommand reports whether name is accepted on the command route.
@@ -467,7 +552,8 @@ func ValidateCommandBody(name string, body map[string]interface{}) error {
 }
 
 // run validates the body again (internal callers may queue commands), executes the command and
-// applies checkError. A body error is not retried; a vehicle error is retried, as in 2.3.0.
+// applies checkError. A body error is not retried; a vehicle error is retried, as in 2.3.0,
+// unless the handler's notRetried says otherwise.
 func (handler commandHandler) run(ctx context.Context, car vehicleCommander, body map[string]interface{}) (shouldRetry bool, err error) {
 	args := commandArgs(body)
 	if handler.validate != nil {
@@ -480,7 +566,7 @@ func (handler commandHandler) run(ctx context.Context, car vehicleCommander, bod
 			err = handler.checkError(err)
 		}
 		if err != nil {
-			return true, err
+			return handler.notRetried == nil || !handler.notRetried(args), err
 		}
 	}
 	return false, nil
@@ -628,6 +714,40 @@ func (args commandArgs) cabinTemps() (driver, passenger float32, err error) {
 func checkCabinTemp(key string, v float64) error {
 	if math.IsNaN(v) || v < minCabinTempCelsius || v > maxCabinTempCelsius {
 		return invalidBodyf("%s must be between %d and %d degrees Celsius", key, minCabinTempCelsius, maxCabinTempCelsius)
+	}
+	return nil
+}
+
+// choiceArg reads a required string key, normalized by TrimSpace and ToLower (not EqualFold,
+// so that the long s, U+017F, does not match "s"), and returns the canonical choice.
+// The client's value is never echoed.
+func (args commandArgs) choiceArg(key string, choices ...string) (string, error) {
+	switch v := args[key].(type) {
+	case nil:
+		return "", invalidBodyf("%s missing", key)
+	case string:
+		value := strings.ToLower(strings.TrimSpace(v))
+		if i := slices.Index(choices, value); i >= 0 {
+			return choices[i], nil
+		}
+		quoted := make([]string, len(choices))
+		for i, choice := range choices {
+			quoted[i] = strconv.Quote(choice)
+		}
+		return "", invalidBodyf("%s must be %s", key, strings.Join(quoted, " or "))
+	default:
+		return "", invalidBodyf("%s must be a string", key)
+	}
+}
+
+// optCoordinateArg reads an optional number (optFloatArg) that must lie in [-limit, limit].
+func (args commandArgs) optCoordinateArg(key string, limit int) error {
+	value, present, err := args.optFloatArg(key)
+	if err != nil || !present {
+		return err
+	}
+	if value < -float64(limit) || value > float64(limit) {
+		return invalidBodyf("%s must be between -%d and %d degrees", key, limit, limit)
 	}
 	return nil
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/wimaha/TeslaBleHttpProxy/internal/api/models"
 	"github.com/wimaha/TeslaBleHttpProxy/internal/ble/control"
 	"github.com/wimaha/TeslaBleHttpProxy/internal/logging"
+	"github.com/wimaha/TeslaBleHttpProxy/internal/tesla/commands"
 )
 
 const (
@@ -331,5 +332,33 @@ func TestTokenNeverLogged(t *testing.T) { // AC7
 	}
 	if !strings.Contains(out.String(), "Unauthorized request") {
 		t.Errorf("refusals not logged")
+	}
+}
+
+// UC1013 AC5: every Fleet command of the registry needs the token when one is configured, and
+// is served as before when none is. No body is sent: the BLE check answers before the body check.
+func TestEveryFleetCommandNeedsToken(t *testing.T) {
+	unauthorized := `{"response":{"result":false,"reason":"unauthorized","vin":"","command":""}}` + "\n"
+	for _, name := range commands.FleetCommandNames() {
+		tc := routeCase{"POST", "/api/1/vehicles/" + testVIN + "/command/" + name, "", accessBearer, 503, notInitialized(name), ""}
+		t.Run(name, func(t *testing.T) {
+			isolate(t)
+			useToken(t, testToken)
+			router := newServedRouter()
+
+			rec := serve(router, tc, "")
+			if rec.Code != 401 || rec.Body.String() != unauthorized {
+				t.Errorf("without credentials: status %d body %q, want 401 unauthorized", rec.Code, rec.Body.String())
+			}
+			rec = serve(router, tc, "Bearer "+wrongSame)
+			if rec.Code != 401 {
+				t.Errorf("wrong token: status %d, want 401", rec.Code)
+			}
+			assertAnswer(t, tc, serve(router, tc, "Bearer "+testToken))
+
+			// No token configured: served as before, no 401.
+			useToken(t, "")
+			assertAnswer(t, tc, serve(newServedRouter(), tc, ""))
+		})
 	}
 }

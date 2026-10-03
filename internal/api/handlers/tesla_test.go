@@ -176,6 +176,27 @@ func TestCommandRoute(t *testing.T) {
 			envelope(true, received, "remote_steering_wheel_heater_request"),
 			[]queuedCommand{{"remote_steering_wheel_heater_request", map[string]interface{}{"on": true}, false}}},
 
+		// UC1013: trunk and window commands refused before queuing, whatever wait is; valid bodies queued unchanged.
+		{"trunk side", "actuate_trunk", "", `{"which_trunk":"side"}`, nil, 503,
+			envelope(false, `invalid request body: which_trunk must be \"rear\" or \"front\"`, "actuate_trunk"), nil},
+		{"trunk empty object wait=true", "actuate_trunk", "?wait=true", `{}`, nil, 503,
+			envelope(false, "invalid request body: which_trunk missing", "actuate_trunk"), nil},
+		{"trunk not a string", "actuate_trunk", "", `{"which_trunk":1}`, nil, 503,
+			envelope(false, "invalid request body: which_trunk must be a string", "actuate_trunk"), nil},
+		{"trunk rear queued unchanged", "actuate_trunk", "", `{"which_trunk":"rear"}`, nil, 200,
+			envelope(true, received, "actuate_trunk"),
+			[]queuedCommand{{"actuate_trunk", map[string]interface{}{"which_trunk": "rear"}, false}}},
+		{"window open", "window_control", "", `{"command":"open"}`, nil, 503,
+			envelope(false, `invalid request body: command must be \"vent\" or \"close\"`, "window_control"), nil},
+		{"window close lat 91", "window_control", "", `{"command":"close","lat":91,"lon":2}`, nil, 503,
+			envelope(false, "invalid request body: lat must be between -90 and 90 degrees", "window_control"), nil},
+		{"window vent queued unchanged", "window_control", "", `{"command":"vent"}`, nil, 200,
+			envelope(true, received, "window_control"),
+			[]queuedCommand{{"window_control", map[string]interface{}{"command": "vent"}, false}}},
+		{"window close with coordinates as strings", "window_control", "", `{"command":"close","lat":"48.85","lon":2.35}`, nil, 200,
+			envelope(true, received, "window_control"),
+			[]queuedCommand{{"window_control", map[string]interface{}{"command": "close", "lat": "48.85", "lon": 2.35}, false}}},
+
 		// AC7: unchanged 2.3.0 answers.
 		{"unsupported command", "x", "", `{}`, nil, 503, envelope(false, `The command \"x\" is not supported.`, "x"), nil},
 		{"wait=true success", "set_charging_amps", "?wait=true", `{"charging_amps":16}`, succeed, 200, envelope(true, processed, "set_charging_amps"),
