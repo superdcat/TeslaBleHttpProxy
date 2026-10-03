@@ -5,8 +5,9 @@
 // Derived from Lenart12/TeslaBleHttpProxy, internal/tesla/commands/fleetVehicleCommands.go
 // (commit 94d1fd8), Copyright Lenart12 and contributors, Apache License 2.0.
 // Modified in the superdcat fork: lenient parsing of wimaha 2.3.0 (numeric strings,
-// "true"/"false", decimals truncated), no value bounds, wimaha 2.3.0 error messages,
-// validation without mutating the body, vehicle behind an interface for tests.
+// "true"/"false", decimals truncated), no value bounds on the wimaha 2.3.0 commands,
+// wimaha 2.3.0 error messages, validation without mutating the body, vehicle behind an
+// interface for tests. set_temps follows the contract of wimaha/TeslaBleHttpProxy PR #162.
 
 package commands
 
@@ -43,7 +44,15 @@ type vehicleCommander interface {
 	ChargeStop(ctx context.Context) error
 	SetChargingAmps(ctx context.Context, amps int32) error
 	ChangeChargeLimit(ctx context.Context, chargeLimitPercent int32) error
+	ChangeClimateTemp(ctx context.Context, driverCelsius float32, passengerCelsius float32) error
+	SetPreconditioningMax(ctx context.Context, enabled bool, manualOverride bool) error
 }
+
+// Bounds of the cabin temperature setpoints, in degrees Celsius, inclusive (wimaha PR #162).
+const (
+	minCabinTempCelsius = 15
+	maxCabinTempCelsius = 28
+)
 
 var _ vehicleCommander = (*vehicle.Vehicle)(nil)
 
@@ -211,6 +220,38 @@ var fleetVehicleCommands = map[string]commandHandler{
 			return nil
 		},
 	},
+
+	// UC1010: climate setpoints (ported from Lenart12, adapted).
+	"set_temps": {
+		validate: func(args commandArgs) error {
+			_, _, err := args.cabinTemps()
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			driver, passenger, _ := args.cabinTemps() // validated by run
+			if err := car.ChangeClimateTemp(ctx, driver, passenger); err != nil {
+				return fmt.Errorf("failed to set temps to %.1f/%.1f: %w", driver, passenger, err)
+			}
+			return nil
+		},
+	},
+	"set_preconditioning_max": {
+		validate: func(args commandArgs) error {
+			if _, err := args.boolArg("on"); err != nil {
+				return err
+			}
+			_, err := args.optBoolArg("manual_override")
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			on, _ := args.boolArg("on")                             // validated by run
+			manualOverride, _ := args.optBoolArg("manual_override") // validated by run
+			if err := car.SetPreconditioningMax(ctx, on, manualOverride); err != nil {
+				return fmt.Errorf("failed to set preconditioning max: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // IsSupportedCommand reports whether name is accepted on the command route.
@@ -310,4 +351,71 @@ func (args commandArgs) boolArg(key string) (bool, error) {
 	default:
 		return false, invalidBodyf("%s must be a boolean or \"true\"/\"false\"", key)
 	}
+}
+
+// optBoolArg reads an optional boolean key: absent or null is false, otherwise as boolArg.
+func (args commandArgs) optBoolArg(key string) (bool, error) {
+	if args[key] == nil {
+		return false, nil
+	}
+	return args.boolArg(key)
+}
+
+// optFloatArg reads an optional finite number: a JSON number or a decimal string
+// (strconv.ParseFloat after TrimSpace, as wimaha PR #162; int32Arg does not trim). The decimal
+// separator is a point. NaN and infinities are refused, whatever their spelling.
+func (args commandArgs) optFloatArg(key string) (value float64, present bool, err error) {
+	switch v := args[key].(type) {
+	case nil:
+		return 0, false, nil
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, true, invalidBodyf("%s is not a valid number", key)
+		}
+		return v, true, nil
+	case string:
+		f, perr := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if errors.Is(perr, strconv.ErrRange) {
+			return 0, true, invalidBodyf("%s is out of range", key)
+		}
+		if perr != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, true, invalidBodyf("%s is not a valid number", key)
+		}
+		return f, true, nil
+	default:
+		return 0, true, invalidBodyf("%s must be a number or a numeric string", key)
+	}
+}
+
+// cabinTemps reads driver_temp (required) and passenger_temp (optional, defaults to the driver
+// setpoint), both within [minCabinTempCelsius, maxCabinTempCelsius]. The body is not modified.
+func (args commandArgs) cabinTemps() (driver, passenger float32, err error) {
+	driverValue, present, err := args.optFloatArg("driver_temp")
+	if err != nil {
+		return 0, 0, err
+	}
+	if !present {
+		return 0, 0, invalidBodyf("driver_temp missing")
+	}
+	if err := checkCabinTemp("driver_temp", driverValue); err != nil {
+		return 0, 0, err
+	}
+	passengerValue, present, err := args.optFloatArg("passenger_temp")
+	if err != nil {
+		return 0, 0, err
+	}
+	if !present {
+		passengerValue = driverValue
+	}
+	if err := checkCabinTemp("passenger_temp", passengerValue); err != nil {
+		return 0, 0, err
+	}
+	return float32(driverValue), float32(passengerValue), nil
+}
+
+func checkCabinTemp(key string, v float64) error {
+	if math.IsNaN(v) || v < minCabinTempCelsius || v > maxCabinTempCelsius {
+		return invalidBodyf("%s must be between %d and %d degrees Celsius", key, minCabinTempCelsius, maxCabinTempCelsius)
+	}
+	return nil
 }

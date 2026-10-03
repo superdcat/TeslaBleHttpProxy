@@ -119,6 +119,21 @@ func TestCommandRoute(t *testing.T) {
 		{"command without body ignores an unreadable body", "flash_lights", "", `not json`, nil, 200, envelope(true, received, "flash_lights"),
 			[]queuedCommand{{"flash_lights", nil, false}}},
 
+		// UC1010 AC2: climate setpoints refused before queuing, whatever wait is.
+		{"temps empty object", "set_temps", "", `{}`, nil, 503,
+			envelope(false, "invalid request body: driver_temp missing", "set_temps"), nil},
+		{"temps empty object wait=true", "set_temps", "?wait=true", `{}`, nil, 503,
+			envelope(false, "invalid request body: driver_temp missing", "set_temps"), nil},
+		{"temps out of bounds", "set_temps", "", `{"driver_temp":28.1}`, nil, 503,
+			envelope(false, "invalid request body: driver_temp must be between 15 and 28 degrees Celsius", "set_temps"), nil},
+		{"temps as string queued unchanged", "set_temps", "", `{"driver_temp":"21"}`, nil, 200, envelope(true, received, "set_temps"),
+			[]queuedCommand{{"set_temps", map[string]interface{}{"driver_temp": "21"}, false}}},
+		{"preconditioning without on", "set_preconditioning_max", "", `{}`, nil, 503,
+			envelope(false, "invalid request body: on missing", "set_preconditioning_max"), nil},
+		{"preconditioning queued unchanged", "set_preconditioning_max", "", `{"on":true}`, nil, 200,
+			envelope(true, received, "set_preconditioning_max"),
+			[]queuedCommand{{"set_preconditioning_max", map[string]interface{}{"on": true}, false}}},
+
 		// AC7: unchanged 2.3.0 answers.
 		{"unsupported command", "x", "", `{}`, nil, 503, envelope(false, `The command \"x\" is not supported.`, "x"), nil},
 		{"wait=true success", "set_charging_amps", "?wait=true", `{"charging_amps":16}`, succeed, 200, envelope(true, processed, "set_charging_amps"),

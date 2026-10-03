@@ -169,6 +169,8 @@ The program uses the same interfaces as the Tesla [Fleet API](https://developer.
 - door_lock
 - door_unlock
 - set_sentry_mode
+- set_temps (superdcat fork)
+- set_preconditioning_max (superdcat fork)
 
 By default, the program will return immediately after sending the command to the vehicle. If you want to wait for the command to complete, you can set the `wait` parameter to `true`.
 
@@ -192,6 +194,16 @@ Set charging amps to 5A:
 
 Explicitly wake up the vehicle:
 `http://localhost:8080/api/1/vehicles/{VIN}/command/wake_up`
+
+Set the cabin temperature (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/set_temps` with body `{"driver_temp": 21.5, "passenger_temp": 20}`
+
+`driver_temp` is required; `passenger_temp` is optional and defaults to the driver setpoint. Values are in degrees Celsius (15 to 28, inclusive), whatever the region of the vehicle, as a number or a numeric string with a decimal point (`"21.5"`, not `"21,5"`). Other values are refused with HTTP 503 before the command is queued. These commands need the Owner role (a Charging Manager key is refused by the vehicle).
+
+Start or stop maximum preconditioning (superdcat fork):
+`http://localhost:8080/api/1/vehicles/{VIN}/command/set_preconditioning_max` with body `{"on": true}`
+
+`on` is required; `manual_override` is optional and defaults to `false`.
 
 ### Vehicle Data
 

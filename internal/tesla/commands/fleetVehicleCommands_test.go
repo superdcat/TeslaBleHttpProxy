@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -49,6 +50,12 @@ func (f *fakeCar) SetSentryMode(_ context.Context, state bool) error {
 }
 func (f *fakeCar) SetChargingAmps(_ context.Context, amps int32) error {
 	return f.record(fmt.Sprintf("SetChargingAmps(%d)", amps))
+}
+func (f *fakeCar) ChangeClimateTemp(_ context.Context, driver, passenger float32) error {
+	return f.record(fmt.Sprintf("ChangeClimateTemp(%g,%g)", driver, passenger))
+}
+func (f *fakeCar) SetPreconditioningMax(_ context.Context, on, manualOverride bool) error {
+	return f.record(fmt.Sprintf("SetPreconditioningMax(%t,%t)", on, manualOverride))
 }
 func (f *fakeCar) ChangeChargeLimit(_ context.Context, percent int32) error {
 	return f.record(fmt.Sprintf("ChangeChargeLimit(%d)", percent))
@@ -176,6 +183,55 @@ func TestCommandBodies(t *testing.T) {
 		{"set_sentry_mode", `{"on":null}`, "", "invalid request body: on missing"},
 		{"set_sentry_mode", `{"on":"yes"}`, "", "invalid request body: on is not a valid boolean"},
 		{"set_sentry_mode", `{"on":1}`, "", `invalid request body: on must be a boolean or "true"/"false"`},
+
+		// set_temps (UC1010): 15-28 degrees Celsius inclusive, passenger defaults to driver.
+		{"set_temps", `{"driver_temp":21.5,"passenger_temp":20}`, "ChangeClimateTemp(21.5,20)", ""},
+		{"set_temps", `{"driver_temp":21}`, "ChangeClimateTemp(21,21)", ""},
+		{"set_temps", `{"driver_temp":21,"passenger_temp":null}`, "ChangeClimateTemp(21,21)", ""},
+		{"set_temps", `{"driver_temp":15,"passenger_temp":28}`, "ChangeClimateTemp(15,28)", ""},
+		{"set_temps", `{"driver_temp":28,"passenger_temp":15}`, "ChangeClimateTemp(28,15)", ""},
+		{"set_temps", `{"driver_temp":"22","passenger_temp":" 19.5 "}`, "ChangeClimateTemp(22,19.5)", ""},
+		{"set_temps", `{"driver_temp":"15.0"}`, "ChangeClimateTemp(15,15)", ""},
+		{"set_temps", `{"driver_temp":21.1}`, "ChangeClimateTemp(21.1,21.1)", ""},
+		{"set_temps", `{"driver_temp":21,"extra":true}`, "ChangeClimateTemp(21,21)", ""},
+		{"set_temps", ``, "", "invalid request body: driver_temp missing"},
+		{"set_temps", `{}`, "", "invalid request body: driver_temp missing"},
+		{"set_temps", `{"driver_temp":null}`, "", "invalid request body: driver_temp missing"},
+		{"set_temps", `{"passenger_temp":20}`, "", "invalid request body: driver_temp missing"},
+		{"set_temps", `{"driver_temp":14.9}`, "", "invalid request body: driver_temp must be between 15 and 28 degrees Celsius"},
+		{"set_temps", `{"driver_temp":28.1}`, "", "invalid request body: driver_temp must be between 15 and 28 degrees Celsius"},
+		{"set_temps", `{"driver_temp":"14.9"}`, "", "invalid request body: driver_temp must be between 15 and 28 degrees Celsius"},
+		{"set_temps", `{"driver_temp":70}`, "", "invalid request body: driver_temp must be between 15 and 28 degrees Celsius"},
+		{"set_temps", `{"driver_temp":21,"passenger_temp":28.1}`, "", "invalid request body: passenger_temp must be between 15 and 28 degrees Celsius"},
+		{"set_temps", `{"driver_temp":21,"passenger_temp":14.9}`, "", "invalid request body: passenger_temp must be between 15 and 28 degrees Celsius"},
+		{"set_temps", `{"driver_temp":"warm"}`, "", "invalid request body: driver_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":""}`, "", "invalid request body: driver_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":"  "}`, "", "invalid request body: driver_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":"NaN"}`, "", "invalid request body: driver_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":"Inf"}`, "", "invalid request body: driver_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":"-Inf"}`, "", "invalid request body: driver_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":"Infinity"}`, "", "invalid request body: driver_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":"21,5"}`, "", "invalid request body: driver_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":"1e999"}`, "", "invalid request body: driver_temp is out of range"},
+		{"set_temps", `{"driver_temp":true}`, "", "invalid request body: driver_temp must be a number or a numeric string"},
+		{"set_temps", `{"driver_temp":[21]}`, "", "invalid request body: driver_temp must be a number or a numeric string"},
+		{"set_temps", `{"driver_temp":21,"passenger_temp":"x"}`, "", "invalid request body: passenger_temp is not a valid number"},
+		{"set_temps", `{"driver_temp":21,"passenger_temp":false}`, "", "invalid request body: passenger_temp must be a number or a numeric string"},
+		{"set_temps", `{"driver_temp":21,"passenger_temp":""}`, "", "invalid request body: passenger_temp is not a valid number"},
+
+		// set_preconditioning_max (UC1010): on required, manual_override optional (false).
+		{"set_preconditioning_max", `{"on":true}`, "SetPreconditioningMax(true,false)", ""},
+		{"set_preconditioning_max", `{"on":false}`, "SetPreconditioningMax(false,false)", ""},
+		{"set_preconditioning_max", `{"on":true,"manual_override":true}`, "SetPreconditioningMax(true,true)", ""},
+		{"set_preconditioning_max", `{"on":"true","manual_override":"false"}`, "SetPreconditioningMax(true,false)", ""},
+		{"set_preconditioning_max", `{"on":true,"manual_override":null}`, "SetPreconditioningMax(true,false)", ""},
+		{"set_preconditioning_max", ``, "", "invalid request body: on missing"},
+		{"set_preconditioning_max", `{}`, "", "invalid request body: on missing"},
+		{"set_preconditioning_max", `{"manual_override":true}`, "", "invalid request body: on missing"},
+		{"set_preconditioning_max", `{"on":"yes"}`, "", "invalid request body: on is not a valid boolean"},
+		{"set_preconditioning_max", `{"on":1}`, "", `invalid request body: on must be a boolean or "true"/"false"`},
+		{"set_preconditioning_max", `{"on":true,"manual_override":"yes"}`, "", "invalid request body: manual_override is not a valid boolean"},
+		{"set_preconditioning_max", `{"on":true,"manual_override":1}`, "", `invalid request body: manual_override must be a boolean or "true"/"false"`},
 	}
 
 	covered := map[string]bool{}
@@ -234,43 +290,81 @@ func TestCommandBodies(t *testing.T) {
 
 // AC7: a vehicle refusal keeps the 2.3.0 reason, is retried as in 2.3.0 and keeps the SDK error (%w).
 func TestVehicleErrorsKeep230Messages(t *testing.T) {
-	const fault = "MESSAGEFAULT_ERROR_INSUFFICIENT_PRIVILEGES"
 	tests := []struct {
 		command string
 		body    string
 		want    string
 	}{
-		{"auto_conditioning_start", "", "failed to start auto conditioning: " + fault},
-		{"auto_conditioning_stop", "", "failed to stop auto conditioning: " + fault},
-		{"charge_port_door_open", "", "failed to open charge port: " + fault},
-		{"charge_port_door_close", "", "failed to close charge port: " + fault},
-		{"flash_lights", "", "failed to flash lights: " + fault},
-		{"wake_up", "", "failed to wake up car: " + fault},
-		{"honk_horn", "", "failed to honk horn " + fault},
-		{"door_lock", "", "failed to lock " + fault},
-		{"door_unlock", "", "failed to unlock " + fault},
-		{"set_sentry_mode", `{"on":true}`, "failed to set sentry mode " + fault},
-		{"charge_start", "", "failed to start charge: " + fault},
-		{"charge_stop", "", "failed to stop charge: " + fault},
-		{"set_charging_amps", `{"charging_amps":"16"}`, "failed to set charging Amps to 16: " + fault},
-		{"set_charge_limit", `{"percent":80}`, "failed to set charge limit to 80 %: " + fault},
+		{"auto_conditioning_start", "", "failed to start auto conditioning: " + vehicleFault},
+		{"auto_conditioning_stop", "", "failed to stop auto conditioning: " + vehicleFault},
+		{"charge_port_door_open", "", "failed to open charge port: " + vehicleFault},
+		{"charge_port_door_close", "", "failed to close charge port: " + vehicleFault},
+		{"flash_lights", "", "failed to flash lights: " + vehicleFault},
+		{"wake_up", "", "failed to wake up car: " + vehicleFault},
+		{"honk_horn", "", "failed to honk horn " + vehicleFault},
+		{"door_lock", "", "failed to lock " + vehicleFault},
+		{"door_unlock", "", "failed to unlock " + vehicleFault},
+		{"set_sentry_mode", `{"on":true}`, "failed to set sentry mode " + vehicleFault},
+		{"charge_start", "", "failed to start charge: " + vehicleFault},
+		{"charge_stop", "", "failed to stop charge: " + vehicleFault},
+		{"set_charging_amps", `{"charging_amps":"16"}`, "failed to set charging Amps to 16: " + vehicleFault},
+		{"set_charge_limit", `{"percent":80}`, "failed to set charge limit to 80 %: " + vehicleFault},
 	}
 	for _, tt := range tests {
-		t.Run(tt.command, func(t *testing.T) {
-			sdkErr := &protocol.RoutableMessageError{Code: universalmessage.MessageFault_E_MESSAGEFAULT_ERROR_INSUFFICIENT_PRIVILEGES}
-			car := &fakeCar{err: sdkErr}
-			retry, err := fleetVehicleCommands[tt.command].run(context.Background(), car, decodeBody(t, tt.body))
-			if err == nil || err.Error() != tt.want {
-				t.Fatalf("run error = %v, want %q", err, tt.want)
-			}
-			if !retry {
-				t.Error("run does not retry a vehicle error (2.3.0 retries it)")
-			}
-			var routable *protocol.RoutableMessageError
-			if !errors.As(err, &routable) {
-				t.Errorf("run error %v does not wrap the SDK error", err)
-			}
-		})
+		t.Run(tt.command, func(t *testing.T) { assertVehicleError(t, tt.command, tt.body, tt.want) })
+	}
+}
+
+// UC1010: the added commands report the vehicle refusal, retried, with the SDK error wrapped.
+func TestAddedCommandsVehicleErrors(t *testing.T) {
+	tests := []struct {
+		command string
+		body    string
+		want    string
+	}{
+		{"set_temps", `{"driver_temp":21}`, "failed to set temps to 21.0/21.0: " + vehicleFault},
+		{"set_temps", `{"driver_temp":21.5,"passenger_temp":"19"}`, "failed to set temps to 21.5/19.0: " + vehicleFault},
+		{"set_preconditioning_max", `{"on":true}`, "failed to set preconditioning max: " + vehicleFault},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command+" "+tt.body, func(t *testing.T) { assertVehicleError(t, tt.command, tt.body, tt.want) })
+	}
+}
+
+const vehicleFault = "MESSAGEFAULT_ERROR_INSUFFICIENT_PRIVILEGES"
+
+// assertVehicleError runs a command against a car that refuses it with an insufficient
+// privileges fault: the error must read want, be retried and wrap the SDK error.
+func assertVehicleError(t *testing.T, command, body, want string) {
+	t.Helper()
+	sdkErr := &protocol.RoutableMessageError{Code: universalmessage.MessageFault_E_MESSAGEFAULT_ERROR_INSUFFICIENT_PRIVILEGES}
+	car := &fakeCar{err: sdkErr}
+	retry, err := fleetVehicleCommands[command].run(context.Background(), car, decodeBody(t, body))
+	if err == nil || err.Error() != want {
+		t.Fatalf("run error = %v, want %q", err, want)
+	}
+	if !retry {
+		t.Error("run does not retry a vehicle error (2.3.0 retries it)")
+	}
+	var routable *protocol.RoutableMessageError
+	if !errors.As(err, &routable) {
+		t.Errorf("run error %v does not wrap the SDK error", err)
+	}
+}
+
+// optFloatArg refuses NaN and infinities on the number branch too (unreachable through JSON).
+func TestOptFloatArgRefusesNonFinite(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, present, err := commandArgs{"k": v}.optFloatArg("k")
+		if err == nil || err.Error() != "invalid request body: k is not a valid number" || !present {
+			t.Errorf("optFloatArg(%v) = present %t, err %v", v, present, err)
+		}
+		if _, _, err := (commandArgs{"driver_temp": v}).cabinTemps(); err == nil {
+			t.Errorf("cabinTemps accepted %v", v)
+		}
+	}
+	if err := checkCabinTemp("driver_temp", math.NaN()); err == nil {
+		t.Error("checkCabinTemp accepted NaN")
 	}
 }
 
@@ -344,6 +438,7 @@ func TestFleetCommandNamesFloor(t *testing.T) {
 		"auto_conditioning_start", "auto_conditioning_stop", "charge_port_door_close", "charge_port_door_open",
 		"charge_start", "charge_stop", "door_lock", "door_unlock", "flash_lights", "honk_horn",
 		"set_charge_limit", "set_charging_amps", "set_sentry_mode", "wake_up",
+		"set_preconditioning_max", "set_temps",
 	}
 	names := FleetCommandNames()
 	for _, name := range floor {
