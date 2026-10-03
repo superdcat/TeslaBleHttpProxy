@@ -1,0 +1,18 @@
+{
+  "closure_statuses": {
+    "front_driver_door": "CLOSURESTATE_CLOSED",
+    "front_passenger_door": "CLOSURESTATE_CLOSED",
+    "rear_driver_door": "CLOSURESTATE_CLOSED",
+    "rear_passenger_door": "CLOSURESTATE_CLOSED",
+    "rear_trunk": "CLOSURESTATE_CLOSED",
+    "front_trunk": "CLOSURESTATE_CLOSED",
+    "charge_port": "CLOSURESTATE_OPEN",
+    "tonneau": "CLOSURESTATE_CLOSED"
+  },
+  "detailed_closure_status": {
+    "tonneau_percent_open": 0
+  },
+  "user_presence": "VEHICLE_USER_PRESENCE_PRESENT",
+  "vehicle_lock_state": "VEHICLELOCKSTATE_UNLOCKED",
+  "vehicle_sleep_status": "VEHICLE_SLEEP_STATUS_AWAKE"
+}

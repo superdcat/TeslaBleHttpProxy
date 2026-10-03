@@ -1,0 +1,16 @@
+# Input for the golden tests: vcsec.VehicleStatus in protobuf text format. Every field is set to a
+# non-zero value so that the .binpb carries all field numbers (proto3 omits zero values).
+closureStatuses {
+  frontDriverDoor: CLOSURESTATE_OPEN
+  frontPassengerDoor: CLOSURESTATE_OPEN
+  rearDriverDoor: CLOSURESTATE_OPEN
+  rearPassengerDoor: CLOSURESTATE_OPEN
+  rearTrunk: CLOSURESTATE_OPEN
+  frontTrunk: CLOSURESTATE_OPEN
+  chargePort: CLOSURESTATE_OPEN
+  tonneau: CLOSURESTATE_OPEN
+}
+detailedClosureStatus { tonneauPercentOpen: 100 }
+userPresence: VEHICLE_USER_PRESENCE_PRESENT
+vehicleLockState: VEHICLELOCKSTATE_UNLOCKED
+vehicleSleepStatus: VEHICLE_SLEEP_STATUS_AWAKE

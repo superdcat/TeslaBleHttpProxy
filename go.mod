@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/log v0.4.0
 	github.com/gorilla/mux v1.8.1
 	github.com/teslamotors/vehicle-command v0.2.1
+	google.golang.org/protobuf v1.34.2
 )
 
 require (
@@ -31,7 +32,6 @@ require (
 	github.com/stretchr/testify v1.10.0 // indirect
 	golang.org/x/exp v0.0.0-20240808152545-0cdaa3abc0fa // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	google.golang.org/protobuf v1.34.2 // indirect
 )
 
 replace github.com/teslamotors/vehicle-command => github.com/wimaha/vehicle-command v0.0.7

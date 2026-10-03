@@ -1,0 +1,15 @@
+# Input for the golden tests: vcsec.VehicleStatus in protobuf text format (vehicle asleep).
+closureStatuses {
+  frontDriverDoor: CLOSURESTATE_CLOSED
+  frontPassengerDoor: CLOSURESTATE_CLOSED
+  rearDriverDoor: CLOSURESTATE_CLOSED
+  rearPassengerDoor: CLOSURESTATE_CLOSED
+  rearTrunk: CLOSURESTATE_CLOSED
+  frontTrunk: CLOSURESTATE_CLOSED
+  chargePort: CLOSURESTATE_CLOSED
+  tonneau: CLOSURESTATE_CLOSED
+}
+detailedClosureStatus { tonneauPercentOpen: 0 }
+userPresence: VEHICLE_USER_PRESENCE_NOT_PRESENT
+vehicleLockState: VEHICLELOCKSTATE_LOCKED
+vehicleSleepStatus: VEHICLE_SLEEP_STATUS_ASLEEP

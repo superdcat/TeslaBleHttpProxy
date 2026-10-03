@@ -1,0 +1,80 @@
+# Input for the golden tests: carserver.VehicleData in protobuf text format.
+# Values follow the reference vehicle_data response of TeslaBleHttpProxy 2.3.0
+# (charge_state and climate_state, VIN-free).
+charge_state {
+  timestamp { seconds: 1767254400 }
+  charging_state { Charging {} }
+  charge_limit_soc: 80
+  charge_limit_soc_std: 90
+  charge_limit_soc_min: 50
+  charge_limit_soc_max: 100
+  max_range_charge_counter: 0
+  fast_charger_present: false
+  fast_charger_type { ACSingleWireCAN {} }
+  battery_range: 150.5
+  est_battery_range: 138.25
+  ideal_battery_range: 150.5
+  battery_level: 62
+  usable_battery_level: 61
+  charge_energy_added: 12.5
+  charge_miles_added_rated: 48.5
+  charge_miles_added_ideal: 48.5
+  charger_voltage: 229
+  charger_pilot_current: 16
+  charger_actual_current: 16
+  charger_power: 11
+  trip_charging: false
+  charge_rate_mph_float: 28.4
+  charge_port_door_open: true
+  scheduled_charging_mode: ScheduledChargingModeOff
+  charge_enable_request: true
+  charger_phases: 3
+  charge_port_latch { Engaged {} }
+  charge_current_request: 16
+  charge_current_request_max: 16
+  charging_amps: 16
+  off_peak_charging_times { all_week {} }
+  off_peak_hours_end_time: 360
+  preconditioning_enabled: false
+  preconditioning_times { all_week {} }
+  charge_port_color: ChargePortColorFlashingGreen
+  conn_charge_cable { IEC {} }
+  minutes_to_full_charge: 95
+}
+climate_state {
+  timestamp { seconds: 1767254400 }
+  allow_cabin_overheat_protection: true
+  auto_seat_climate_left: false
+  auto_seat_climate_right: false
+  auto_steering_wheel_heat: false
+  bioweapon_mode_on: false
+  cabin_overheat_protection: CabinOverheatProtectionOn
+  cabin_overheat_protection_actively_cooling: false
+  cop_activation_temperature: CopActivationTempHigh
+  inside_temp_celsius: 19.5
+  outside_temp_celsius: 4.5
+  driver_temp_setting: 21
+  passenger_temp_setting: 21
+  left_temp_direction: 0
+  right_temp_direction: 0
+  is_auto_conditioning_on: true
+  is_front_defroster_on: false
+  is_rear_defroster_on: false
+  fan_status: 3
+  hvac_auto_request: HvacAutoRequestOn
+  is_climate_on: true
+  min_avail_temp_celsius: 15
+  max_avail_temp_celsius: 28
+  seat_heater_left: 1
+  seat_heater_right: 0
+  steering_wheel_heater: false
+  supports_fan_only_cabin_overheat_protection: true
+  battery_heater: false
+  battery_heater_no_power: false
+  climate_keeper_mode { Off {} }
+  defrost_mode { Off {} }
+  is_preconditioning: false
+  remote_heater_control_enabled: false
+  side_mirror_heaters: false
+  wiper_blade_heater: false
+}

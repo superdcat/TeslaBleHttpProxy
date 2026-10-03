@@ -1,0 +1,2 @@
+# Wire-format protobuf test inputs (internal/api/models/testdata): never convert line endings.
+*.binpb binary
