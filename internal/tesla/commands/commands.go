@@ -21,7 +21,7 @@ import (
 // Fleet vehicle commands of the registry (fleetVehicleCommands.go): (*Command).Send handles
 // them in its switch and they take no validated body.
 var legacyRouteCommands = []string{"vehicle_data", "session_info"}
-var ExceptedEndpoints = []string{"charge_state", "climate_state"}
+var ExceptedEndpoints = []string{"charge_state", "climate_state", "drive_state"}
 
 // VehicleDataEndpointNames returns the sorted names of the vehicle_data endpoints served by the
 // proxy. The slice is a fresh copy.
@@ -39,6 +39,8 @@ func convertVehicleData(endpoint string, data *carserver.VehicleData) (interface
 		return models.ChargeStateFromBle(data), true
 	case "climate_state":
 		return models.ClimateStateFromBle(data), true
+	case "drive_state":
+		return models.DriveStateFromBle(data), true
 	}
 	return nil, false
 }
