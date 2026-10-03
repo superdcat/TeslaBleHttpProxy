@@ -21,6 +21,7 @@ func main() {
 	logging.InitLogHandler()
 
 	logging.Infof("TeslaBleHttpProxy %s is loading ...", config.Version)
+	logging.Info("Tesla vehicle-command SDK", "Module", config.VehicleCommandModule, "SDKVersion", config.SDKVersion())
 
 	config.InitConfig()
 

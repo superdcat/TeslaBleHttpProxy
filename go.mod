@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	github.com/charmbracelet/log v0.4.0
 	github.com/gorilla/mux v1.8.1
-	github.com/teslamotors/vehicle-command v0.2.1
+	github.com/teslamotors/vehicle-command v0.4.2-0.20260925172039-a4b43c1eff0e
 	google.golang.org/protobuf v1.34.2
 )
 
@@ -33,7 +33,5 @@ require (
 	golang.org/x/exp v0.0.0-20240808152545-0cdaa3abc0fa // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )
-
-replace github.com/teslamotors/vehicle-command => github.com/wimaha/vehicle-command v0.0.7
 
 replace github.com/go-ble/ble => github.com/wimaha/ble_BleConnectFix v0.0.0-20240822192426-3f74826c1268
