@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -26,9 +25,7 @@ func TestExecuteCommandReportsNonRetryableError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var wg sync.WaitGroup
-			wg.Add(1)
-			response := &models.ApiResponse{Wait: &wg, Ctx: context.Background()}
+			response := models.NewApiResponse(context.Background())
 			command := &commands.Command{Command: tt.command, Vin: "TESLABLE000000001", Body: tt.body, Response: response}
 
 			retryCommand, err, _ := (&BleControl{}).ExecuteCommand(nil, command, context.Background())
@@ -42,10 +39,8 @@ func TestExecuteCommandReportsNonRetryableError(t *testing.T) {
 			if response.Result || response.Error != tt.want {
 				t.Errorf("response = (Result %t, Error %q), want (false, %q)", response.Result, response.Error, tt.want)
 			}
-			done := make(chan struct{})
-			go func() { wg.Wait(); close(done) }()
 			select {
-			case <-done:
+			case <-response.Done():
 			case <-time.After(time.Second):
 				t.Fatal("the waiting HTTP handler is never released")
 			}

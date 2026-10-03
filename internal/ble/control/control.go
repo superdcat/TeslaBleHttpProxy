@@ -71,33 +71,53 @@ func (bc *BleControl) Loop() {
 	var retryCommand *commands.Command
 	for {
 		time.Sleep(1 * time.Second)
-		if retryCommand != nil {
-			logging.Info("Retrying command", "Command", retryCommand.Command, "Body", retryCommand.Body)
-			retryCommand = bc.connectToVehicleAndOperateConnection(retryCommand)
-		} else {
-			logging.Debug("Waiting for next command ...")
-			// Wait for the next command
-			select {
-			case command, ok := <-bc.providerStack:
-				if ok {
-					retryCommand = bc.connectToVehicleAndOperateConnection(&command)
-				}
-			case command, ok := <-bc.commandStack:
-				if ok {
-					retryCommand = bc.connectToVehicleAndOperateConnection(&command)
-				}
-			}
-		}
+		retryCommand = bc.serveNextCommand(retryCommand)
 	}
 }
 
-func (bc *BleControl) PushCommand(command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) {
-	bc.commandStack <- commands.Command{
+// serveNextCommand runs retryCommand, or waits for the next queued command and runs it. It
+// returns the command to retry on a new connection, if any.
+func (bc *BleControl) serveNextCommand(retryCommand *commands.Command) *commands.Command {
+	if retryCommand != nil {
+		// Handed back for a new connection after its client stopped waiting: never reconnect.
+		if skipAbandonedCommand(retryCommand, stageRequeue) {
+			return nil
+		}
+		logging.Info("Retrying command", "Command", retryCommand.Command, "Body", retryCommand.Body)
+		return bc.connectToVehicleAndOperateConnection(retryCommand)
+	}
+	logging.Debug("Waiting for next command ...")
+	// Wait for the next command
+	select {
+	case command, ok := <-bc.providerStack:
+		if ok {
+			return bc.connectToVehicleAndOperateConnection(&command)
+		}
+	case command, ok := <-bc.commandStack:
+		if ok {
+			return bc.connectToVehicleAndOperateConnection(&command)
+		}
+	}
+	return nil
+}
+
+// PushCommand queues a command. It gives up when ctx ends before the queue accepts the command
+// (queue full): nothing is queued and ctx.Err() is returned.
+func (bc *BleControl) PushCommand(ctx context.Context, command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case bc.commandStack <- commands.Command{
 		Command:    command,
 		Vin:        vin,
 		Body:       body,
 		Response:   response,
 		AutoWakeup: autoWakeup,
+	}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -124,6 +144,10 @@ func (bc *BleControl) markVehicleAwake(vin string) {
 }
 
 func (bc *BleControl) connectToVehicleAndOperateConnection(firstCommand *commands.Command) *commands.Command {
+	// Taken from the queue after its client stopped waiting: never connect.
+	if skipAbandonedCommand(firstCommand, stageQueue) {
+		return nil
+	}
 	logging.Info("Connecting to Vehicle ...")
 	//defer log.Debug("connecting to Vehicle done")
 
@@ -136,9 +160,7 @@ func (bc *BleControl) connectToVehicleAndOperateConnection(firstCommand *command
 		if firstCommand.Response != nil {
 			firstCommand.Response.Error = err.Error()
 			firstCommand.Response.Result = false
-			if firstCommand.Response.Wait != nil {
-				firstCommand.Response.Wait.Done()
-			}
+			firstCommand.Response.Finish()
 		}
 		return nil
 	}
@@ -146,9 +168,6 @@ func (bc *BleControl) connectToVehicleAndOperateConnection(firstCommand *command
 	var parentCtx context.Context
 	if firstCommand.Response != nil && firstCommand.Response.Ctx != nil {
 		parentCtx = firstCommand.Response.Ctx
-		if parentCtx.Err() != nil {
-			return commandError(parentCtx.Err())
-		}
 	} else {
 		if firstCommand.Response != nil {
 			logging.Warn("No context provided, using default", "Command", firstCommand.Command, "Body", firstCommand.Body)
@@ -163,13 +182,16 @@ func (bc *BleControl) connectToVehicleAndOperateConnection(firstCommand *command
 			select {
 			case <-time.After(sleep):
 			case <-parentCtx.Done():
+				if skipAbandonedCommand(firstCommand, stageConnect) {
+					return nil
+				}
 				return commandError(parentCtx.Err())
 			}
 			sleep *= 2
 		}
 		logging.Debugf("Connecting to vehicle (Attempt %d) ...", i+1)
 		ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
-		conn, car, retry, err := bc.TryConnectToVehicle(ctx, firstCommand)
+		conn, car, retry, err := tryConnectToVehicle(bc, ctx, firstCommand)
 		if err == nil {
 			//Successful - cancel the connection attempt context since we're done with it
 			cancel()
@@ -182,6 +204,10 @@ func (bc *BleControl) connectToVehicleAndOperateConnection(firstCommand *command
 		} else if !retry || parentCtx.Err() != nil {
 			//Failed but no retry possible - cancel context before returning
 			cancel()
+			if skipAbandonedCommand(firstCommand, stageConnect) {
+				logging.Debug("Connection attempt interrupted", "Error", err)
+				return nil
+			}
 			return commandError(err)
 		} else {
 			// Will retry - cancel this attempt's context before next iteration
@@ -428,6 +454,10 @@ func (bc *BleControl) operateConnection(car *vehicle.Vehicle, firstCommand *comm
 	}
 
 	handleCommand := func(command *commands.Command) (doReturn bool, retryCommand *commands.Command) {
+		// Taken from the queue after its client stopped waiting: skipped, the connection stays open.
+		if skipAbandonedCommand(command, stageQueue) {
+			return false, nil
+		}
 		//If new VIN, close connection
 		if command.Vin != firstCommand.Vin {
 			logging.Debug("New VIN, closing connection ...")
@@ -443,6 +473,11 @@ func (bc *BleControl) operateConnection(car *vehicle.Vehicle, firstCommand *comm
 		// If the context is not done, return to retry the command
 		if err != nil && ctx.Err() == nil {
 			return true, cmd
+		}
+		// A command handed back while the connection stays open (closed pipe) is not retried
+		// here: release its waiting handler with the failure already recorded.
+		if cmd != nil && cmd.Response != nil {
+			cmd.Response.Finish()
 		}
 
 		// Successful or api context done so no retry
@@ -477,7 +512,6 @@ func (bc *BleControl) operateConnection(car *vehicle.Vehicle, firstCommand *comm
 }
 
 func (bc *BleControl) ExecuteCommand(car *vehicle.Vehicle, command *commands.Command, connectionCtx context.Context) (retryCommand *commands.Command, retErr error, ctx context.Context) {
-	logging.Info("Executing command", "Command", command.Command, "Body", command.Body)
 	if command.Response != nil && command.Response.Ctx != nil {
 		ctx = command.Response.Ctx
 	} else {
@@ -501,16 +535,22 @@ func (bc *BleControl) ExecuteCommand(car *vehicle.Vehicle, command *commands.Com
 			} else {
 				command.Response.Result = true
 			}
-			if command.Response.Wait != nil && retryCommand == nil {
-				command.Response.Wait.Done()
+			if retryCommand == nil {
+				command.Response.Finish()
 			}
 		}
 	}()
 
+	// The client stopped waiting before the command was sent: never send it.
+	if err := command.Abandoned(); err != nil {
+		logAbandoned(command, stageSend, nil)
+		return nil, err, ctx
+	}
 	// If the context is already done, return immediately
 	if ctx.Err() != nil {
 		return nil, ctx.Err(), ctx
 	}
+	logging.Info("Executing command", "Command", command.Command, "Body", command.Body)
 
 	// Wrap ctx with connectionCtx
 	ctx, cancel := context.WithCancel(ctx)
@@ -527,12 +567,21 @@ func (bc *BleControl) ExecuteCommand(car *vehicle.Vehicle, command *commands.Com
 
 	for i := 0; i < retryCount; i++ {
 		if i > 0 {
+			// Retry point: stop before waiting when the client stopped waiting.
+			if err := command.Abandoned(); err != nil {
+				logAbandoned(command, stageRetry, lastErr)
+				return nil, err, ctx
+			}
 			logging.Warn("Retry error", "error", lastErr)
 			logging.Info(fmt.Sprintf("Retrying in %d seconds", sleep/time.Second))
 
 			select {
 			case <-time.After(sleep):
 			case <-ctx.Done():
+				if err := command.Abandoned(); err != nil {
+					logAbandoned(command, stageRetry, lastErr)
+					return nil, err, ctx
+				}
 				if connectionCtx.Err() != nil {
 					return command, ctx.Err(), ctx
 				}
@@ -541,7 +590,17 @@ func (bc *BleControl) ExecuteCommand(car *vehicle.Vehicle, command *commands.Com
 			sleep *= 2
 		}
 
-		retry, err := command.Send(ctx, car)
+		// Last check before the SDK: it may still transmit a command whose context is done.
+		if err := command.Abandoned(); err != nil {
+			stage := stageSend
+			if i > 0 {
+				stage = stageRetry
+			}
+			logAbandoned(command, stage, lastErr)
+			return nil, err, ctx
+		}
+		command.SendAttempts++
+		retry, err := sendCommand(command, ctx, car)
 		if err == nil {
 			logging.Info("Successfully executed", "Command", command.Command, "Body", command.Body)
 			return nil, nil, ctx
@@ -554,6 +613,11 @@ func (bc *BleControl) ExecuteCommand(car *vehicle.Vehicle, command *commands.Com
 		}
 
 		if strings.Contains(err.Error(), "closed pipe") {
+			// Not handed back for a new connection once the client stopped waiting.
+			if abandonedErr := command.Abandoned(); abandonedErr != nil {
+				logAbandoned(command, stageRetry, err)
+				return nil, abandonedErr, ctx
+			}
 			return command, err, ctx
 		}
 

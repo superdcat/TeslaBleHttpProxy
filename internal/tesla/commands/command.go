@@ -27,6 +27,8 @@ type Command struct {
 	Body       map[string]interface{}
 	Response   *models.ApiResponse
 	AutoWakeup bool
+	// SendAttempts counts the sendings handed to the SDK, also across retries on a new connection.
+	SendAttempts int
 }
 
 // 'charge_state', 'climate_state', 'closures_state', 'drive_state', 'gui_settings', 'location_data', 'charge_schedule_data', 'preconditioning_schedule_data', 'vehicle_config', 'vehicle_state', 'vehicle_data_combo'
@@ -49,4 +51,15 @@ func GetCategory(nameStr string) (vehicle.StateCategory, error) {
 		return category, nil
 	}
 	return 0, fmt.Errorf("unrecognized state category '%s'", nameStr)
+}
+
+// Abandoned returns the error of the context of the HTTP request waiting for the command
+// (context.Canceled when the client hung up, context.DeadlineExceeded past its deadline), or nil
+// while it waits. A command nobody waits for (wait=false, internal commands) is never abandoned.
+// Adapted from Lenart12/TeslaBleHttpProxy (IsContextDone, commit 64390c6), without side effect.
+func (command *Command) Abandoned() error {
+	if command.Response == nil || command.Response.Ctx == nil {
+		return nil
+	}
+	return command.Response.Ctx.Err()
 }

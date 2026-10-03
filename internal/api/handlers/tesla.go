@@ -44,14 +44,40 @@ func commonDefer(w http.ResponseWriter, response *models.Response) {
 	}
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(ret); err != nil {
-		logging.Fatal("failed to send response", "error", err)
+		// The client may have hung up: never stop the proxy for it.
+		logging.Warn("failed to send response", "error", err)
 	}
 	logging.Debug("Response", "Command", response.Command, "Status", status, "Result", response.Result, "Reason", response.Reason)
 }
 
-// enqueueCommand puts a command on the BLE queue (replaced in tests).
-var enqueueCommand = func(command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) {
-	control.BleControlInstance.PushCommand(command, vin, body, response, autoWakeup)
+// enqueueCommand puts a command on the BLE queue, unless ctx ends first (replaced in tests).
+var enqueueCommand = func(ctx context.Context, command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) error {
+	return control.BleControlInstance.PushCommand(ctx, command, vin, body, response, autoWakeup)
+}
+
+// maxDrainedBody bounds the rest of a request body read before waiting for the BLE queue.
+const maxDrainedBody = 64 << 10
+
+// drainBody reads the rest of the request body: net/http watches the connection, and cancels
+// the request context when the client hangs up, only once the body has been read to its end.
+func drainBody(r *http.Request) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, maxDrainedBody))
+}
+
+// waitForCommand waits until the BLE queue finished the command or the client stops waiting.
+// It returns ctx.Err() in the second case; apiResponse must then not be read.
+func waitForCommand(ctx context.Context, apiResponse *models.ApiResponse) error {
+	select {
+	case <-apiResponse.Done():
+		return nil
+	case <-ctx.Done():
+		select {
+		case <-apiResponse.Done(): // finished at the same time: keep the outcome
+			return nil
+		default:
+			return ctx.Err()
+		}
+	}
 }
 
 func checkBleControl(response *models.Response) bool {
@@ -119,15 +145,20 @@ func Command(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if wait {
-		var apiResponse models.ApiResponse
-		wg := sync.WaitGroup{}
-		apiResponse.Wait = &wg
-		apiResponse.Ctx = r.Context()
-
-		wg.Add(1)
-		enqueueCommand(command, vin, body, &apiResponse, autoWakeup)
-
-		wg.Wait()
+		ctx := r.Context()
+		drainBody(r)
+		apiResponse := models.NewApiResponse(ctx)
+		err := enqueueCommand(ctx, command, vin, body, apiResponse, autoWakeup)
+		if err == nil {
+			err = waitForCommand(ctx, apiResponse)
+		}
+		if err != nil {
+			// The client stopped waiting: it will not read this answer (see UC1005).
+			logging.Debug("Client stopped waiting for command", "Command", command, "Reason", err)
+			response.Result = false
+			response.Reason = err.Error()
+			return
+		}
 
 		if apiResponse.Result {
 			response.Result = true
@@ -140,7 +171,12 @@ func Command(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enqueueCommand(command, vin, body, nil, autoWakeup)
+	// wait=false: detached from the request, as in 2.3.0 (blocks while the queue is full).
+	if err := enqueueCommand(context.Background(), command, vin, body, nil, autoWakeup); err != nil {
+		response.Result = false
+		response.Reason = err.Error()
+		return
+	}
 	response.Result = true
 	response.Reason = "The command was successfully received and will be processed shortly."
 }
@@ -234,16 +270,18 @@ func VehicleData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Some endpoints missing/expired - fetch from BLE
-	var apiResponse models.ApiResponse
-	wg := sync.WaitGroup{}
-	apiResponse.Wait = &wg
-	apiResponse.Ctx = r.Context()
-
-	wg.Add(1)
+	ctx := r.Context()
+	apiResponse := models.NewApiResponse(ctx)
 	autoWakeup := r.URL.Query().Get("wakeup") == "true"
-	control.BleControlInstance.PushCommand(command, vin, map[string]interface{}{"endpoints": endpoints}, &apiResponse, autoWakeup)
-
-	wg.Wait()
+	err := enqueueCommand(ctx, command, vin, map[string]interface{}{"endpoints": endpoints}, apiResponse, autoWakeup)
+	if err == nil {
+		err = waitForCommand(ctx, apiResponse)
+	}
+	if err != nil {
+		// The client stopped waiting: handled as a failed BLE fetch, as when the queue reports it.
+		logging.Debug("Client stopped waiting for vehicle data", "Reason", err)
+		apiResponse = &models.ApiResponse{Error: err.Error()}
+	}
 
 	if apiResponse.Result {
 		// Parse the BLE response to extract individual endpoint data

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,12 +31,13 @@ func stubQueue(t *testing.T, outcome func(*models.ApiResponse)) *[]queuedCommand
 
 	control.BleControlInstance = &control.BleControl{} // only checked for nil by the handler
 	queued := &[]queuedCommand{}
-	enqueueCommand = func(command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) {
+	enqueueCommand = func(_ context.Context, command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) error {
 		*queued = append(*queued, queuedCommand{command: command, body: body, wait: response != nil})
 		if response != nil {
 			outcome(response)
-			response.Wait.Done()
+			response.Finish()
 		}
+		return nil
 	}
 	return queued
 }

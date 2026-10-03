@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -73,8 +74,9 @@ func TestCapabilitiesWithoutBLE(t *testing.T) {
 	previousInstance, previousEnqueue := control.BleControlInstance, enqueueCommand
 	t.Cleanup(func() { control.BleControlInstance, enqueueCommand = previousInstance, previousEnqueue })
 	control.BleControlInstance = nil
-	enqueueCommand = func(string, string, map[string]interface{}, *models.ApiResponse, bool) {
+	enqueueCommand = func(context.Context, string, string, map[string]interface{}, *models.ApiResponse, bool) error {
 		t.Errorf("capabilities must not queue any BLE command")
+		return nil
 	}
 
 	start := time.Now()
