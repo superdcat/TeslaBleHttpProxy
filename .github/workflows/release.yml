@@ -202,20 +202,30 @@ jobs:
           REF: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
         run: |
           set -euo pipefail
+          # Pull each platform by its OWN manifest digest: pulling the index digest once per
+          # platform fails on the second pull ("cannot overwrite digest"), because the local
+          # image store maps one digest to one platform only.
+          index="$(docker buildx imagetools inspect "$REF" --raw)"
           check() {
-            local platform="$1" asset="$2" id want got
-            docker pull --platform "$platform" "$REF" >/dev/null
-            id="$(docker create --platform "$platform" "$REF")"
+            local os="$1" arch="$2" variant="$3" asset="$4" digest ref id want got
+            digest="$(jq -r --arg os "$os" --arg arch "$arch" --arg variant "$variant"               '.manifests[] | select(.platform.os == $os and .platform.architecture == $arch
+                and ((.platform.variant // "") == $variant)) | .digest' <<<"$index")"
+            [ -n "$digest" ] && [ "$(wc -l <<<"$digest")" -eq 1 ]               || { echo "::error::no single manifest for $os/$arch${variant:+/$variant} in $REF"; exit 1; }
+            ref="${IMAGE}@${digest}"
+            docker pull --quiet "$ref" >/dev/null
+            id="$(docker create "$ref")"
             docker cp "$id:/teslaBleHttpProxy" "$RUNNER_TEMP/published-$asset"
             docker rm "$id" >/dev/null
+            docker image rm "$ref" >/dev/null
             want="$(sha256sum "$RUNNER_TEMP/dist/TeslaBleHttpProxy-linux-$asset" | cut -d' ' -f1)"
             got="$(sha256sum "$RUNNER_TEMP/published-$asset" | cut -d' ' -f1)"
-            [ "$got" = "$want" ] || { echo "::error::published $platform binary differs from release asset"; exit 1; }
+            [ "$got" = "$want" ] || { echo "::error::published $os/$arch${variant:+/$variant} binary differs from release asset"; exit 1; }
+            echo "ok $os/$arch${variant:+/$variant} $digest"
           }
-          check linux/amd64  amd64
-          check linux/arm64  arm64
-          check linux/arm/v7 armv7
-          check linux/arm/v6 armv6
+          check linux amd64 ""  amd64
+          check linux arm64 ""  arm64
+          check linux arm   v7  armv7
+          check linux arm   v6  armv6
 
       - name: Keep release binaries
         if: github.ref_type == 'tag'
