@@ -1,4 +1,17 @@
-# TeslaBleHttpProxy
+# TeslaBleHttpProxy (superdcat fork)
+
+> **This is a maintained fork** of [wimaha/TeslaBleHttpProxy](https://github.com/wimaha/TeslaBleHttpProxy), with changes
+> ported from [Lenart12/TeslaBleHttpProxy](https://github.com/Lenart12/TeslaBleHttpProxy) (see [NOTICE](NOTICE)).
+> Docker image: **`ghcr.io/superdcat/tesla-ble-http-proxy`** (linux/amd64, arm64, arm/v7, arm/v6).
+>
+> - **Drop-in replacement for wimaha 2.3.0**: same routes, same response envelope, same accepted bodies — evcc and the
+>   Jeedom plugin [Tesla BLE](https://jeedomdocs.decastro.fr/teslable/) keep working unchanged. Changes are additions only.
+> - Built on the latest official [vehicle-command](https://github.com/teslamotors/vehicle-command) SDK.
+> - Adds: strict request body validation (no more false success), `GET /api/proxy/1/capabilities`, optional API token,
+>   `body_controller_state` through the BLE queue, abandoned requests no longer executed, and more vehicle commands
+>   (climate, seats, trunks, charge schedules…) and data endpoints.
+> - Versions are `X.Y.Z-tb.N` (wimaha base version + fork release number). `latest` = last release, `edge` = last build
+>   of `main` (for testing).
 
 TeslaBleHttpProxy is a program written in Go that receives HTTP requests and forwards them via Bluetooth to a Tesla vehicle. The program can, for example, be easily used together with [evcc](https://github.com/evcc-io/evcc).
 
@@ -31,7 +44,7 @@ Below you will find the necessary contents for your `docker-compose.yml`:
 ```
 services:
   tesla-ble-http-proxy:
-    image: wimaha/tesla-ble-http-proxy
+    image: ghcr.io/superdcat/tesla-ble-http-proxy:latest   # or pin a release: ghcr.io/superdcat/tesla-ble-http-proxy:X.Y.Z-tb.N
     container_name: tesla-ble-http-proxy
     volumes:
       - ~/TeslaBleHttpProxy/key:/key
@@ -47,6 +60,12 @@ services:
 Please remember to create an empty folder where the keys can be stored later. In this example, it is `~/TeslaBleHttpProxy/key`.
 
 Pull and start TeslaBleHttpProxy with `docker compose up -d`.
+
+**Migrating from the wimaha image:** only change the `image:` line, then run `docker compose pull && docker compose up -d`.
+The `key` folder is kept: no new pairing is needed. To go back, restore the previous `image:` line.
+
+**Updates:** restarting the Pi does **not** update the image. Run `docker compose pull && docker compose up -d` (with a
+pinned tag, change the tag first). Release notes: [Releases](https://github.com/superdcat/TeslaBleHttpProxy/releases).
 
 Note that you can optionally set environment variables to override the default behavior. See [environment variables](docs/environment_variables.md) for more information.
 

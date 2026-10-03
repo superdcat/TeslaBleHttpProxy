@@ -68,7 +68,7 @@ Paste the following content to the file:
 ```
 services:
   tesla-ble-http-proxy:
-    image: wimaha/tesla-ble-http-proxy
+    image: ghcr.io/superdcat/tesla-ble-http-proxy:latest
     container_name: tesla-ble-http-proxy
     volumes:
       - ~/TeslaBleHttpProxy/key:/key
@@ -98,7 +98,7 @@ docker compose up -d
 You can update the container as follows:
 
 ```
-docker pull wimaha/tesla-ble-http-proxy
+docker pull ghcr.io/superdcat/tesla-ble-http-proxy:latest
 docker compose up -d
 ```
 
