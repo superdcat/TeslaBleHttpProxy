@@ -230,6 +230,50 @@ func TestCommandRoute(t *testing.T) {
 			envelope(true, received, "set_scheduled_charging"),
 			[]queuedCommand{{"set_scheduled_charging", map[string]interface{}{"enable": false}, false}}},
 
+		// UC1022: complementary commands. Invalid bodies are refused before queuing, whatever wait is;
+		// commands without body ignore any body.
+		{"volume 99", "adjust_volume", "", `{"volume":99}`, nil, 503,
+			envelope(false, "invalid request body: volume must be between 0 and 10", "adjust_volume"), nil},
+		{"volume 99 wait=true", "adjust_volume", "?wait=true", `{"volume":99}`, nil, 503,
+			envelope(false, "invalid request body: volume must be between 0 and 10", "adjust_volume"), nil},
+		{"volume as string queued unchanged", "adjust_volume", "", `{"volume":"5"}`, nil, 200, envelope(true, received, "adjust_volume"),
+			[]queuedCommand{{"adjust_volume", map[string]interface{}{"volume": "5"}, false}}},
+		{"charge_standard without body", "charge_standard", "", "", nil, 200, envelope(true, received, "charge_standard"),
+			[]queuedCommand{{"charge_standard", nil, false}}},
+		{"charge_standard without body wait=true", "charge_standard", "?wait=true", "", succeed, 200, envelope(true, processed, "charge_standard"),
+			[]queuedCommand{{"charge_standard", nil, true}}},
+		{"charge_max_range without body", "charge_max_range", "", "", nil, 200, envelope(true, received, "charge_max_range"),
+			[]queuedCommand{{"charge_max_range", nil, false}}},
+		{"media_toggle_playback without body", "media_toggle_playback", "", "", nil, 200, envelope(true, received, "media_toggle_playback"),
+			[]queuedCommand{{"media_toggle_playback", nil, false}}},
+		{"cancel_software_update unreadable body ignored", "cancel_software_update", "", `not json`, nil, 200,
+			envelope(true, received, "cancel_software_update"), []queuedCommand{{"cancel_software_update", nil, false}}},
+		{"software update offset abc", "schedule_software_update", "", `{"offset_sec":"abc"}`, nil, 503,
+			envelope(false, "invalid request body: offset_sec is not a valid integer", "schedule_software_update"), nil},
+		{"software update empty object wait=true", "schedule_software_update", "?wait=true", `{}`, nil, 503,
+			envelope(false, "invalid request body: offset_sec missing", "schedule_software_update"), nil},
+		{"software update offset as string queued unchanged", "schedule_software_update", "", `{"offset_sec":"3600"}`, nil, 200,
+			envelope(true, received, "schedule_software_update"),
+			[]queuedCommand{{"schedule_software_update", map[string]interface{}{"offset_sec": "3600"}, false}}},
+		{"precondition empty object", "add_precondition_schedule", "", `{}`, nil, 503,
+			envelope(false, "invalid request body: days_of_week missing", "add_precondition_schedule"), nil},
+		{"precondition with id queued unchanged", "add_precondition_schedule", "",
+			`{"id":42,"days_of_week":"All","precondition_time":450,"enabled":true,"lat":1,"lon":2}`, nil, 200,
+			envelope(true, received, "add_precondition_schedule"),
+			[]queuedCommand{{"add_precondition_schedule", map[string]interface{}{"id": 42.0, "days_of_week": "All", "precondition_time": 450.0, "enabled": true, "lat": 1.0, "lon": 2.0}, false}}},
+		{"remove precondition id 0", "remove_precondition_schedule", "", `{"id":0}`, nil, 503,
+			envelope(false, "invalid request body: id must be a positive integer", "remove_precondition_schedule"), nil},
+		{"remove precondition queued unchanged", "remove_precondition_schedule", "", `{"id":"7"}`, nil, 200,
+			envelope(true, received, "remove_precondition_schedule"),
+			[]queuedCommand{{"remove_precondition_schedule", map[string]interface{}{"id": "7"}, false}}},
+		{"departure enable without time", "set_scheduled_departure", "", `{"enable":true}`, nil, 503,
+			envelope(false, "invalid request body: departure_time missing", "set_scheduled_departure"), nil},
+		{"departure disable queued unchanged", "set_scheduled_departure", "", `{"enable":false}`, nil, 200,
+			envelope(true, received, "set_scheduled_departure"),
+			[]queuedCommand{{"set_scheduled_departure", map[string]interface{}{"enable": false}, false}}},
+		{"dangerous command stays unsupported", "remote_start_drive", "", "", nil, 503,
+			envelope(false, `The command \"remote_start_drive\" is not supported.`, "remote_start_drive"), nil},
+
 		// AC7: unchanged 2.3.0 answers.
 		{"unsupported command", "x", "", `{}`, nil, 503, envelope(false, `The command \"x\" is not supported.`, "x"), nil},
 		{"wait=true success", "set_charging_amps", "?wait=true", `{"charging_amps":16}`, succeed, 200, envelope(true, processed, "set_charging_amps"),
@@ -280,39 +324,50 @@ func TestCommandRouteWithoutKeyKeepsReason(t *testing.T) {
 	}
 }
 
-// UC1014 AC3: a body without id (absent, null or 0) is queued with a generated decimal id, once,
-// the other keys unchanged, with and without wait; the client's JSON is not modified.
+// UC1014 AC3, UC1022: a body without id (absent, null or 0) is queued with a generated decimal id,
+// once, the other keys unchanged, with and without wait; the client's JSON is not modified.
 func TestCommandRouteGeneratesScheduleID(t *testing.T) {
-	const rest = `"days_of_week":"mon,wed,fri","start_time":480,"end_time":1020,"enabled":true,"lat":48.8566,"lon":2.3522`
-	for _, idPart := range []string{"", `"id":null,`, `"id":0,`} {
-		for _, query := range []string{"", "?wait=false", "?wait=true"} {
-			t.Run(idPart+query, func(t *testing.T) {
-				queued := stubQueue(t, func(r *models.ApiResponse) { r.Result = true })
-				rec := postCommand(t, "add_charge_schedule", query, "{"+idPart+rest+"}")
-				if rec.Code != http.StatusOK {
-					t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
-				}
-				if len(*queued) != 1 {
-					t.Fatalf("queued = %+v, want one command", *queued)
-				}
-				if (*queued)[0].wait != (query == "?wait=true") {
-					t.Errorf("queued wait = %v, want %v", (*queued)[0].wait, query == "?wait=true")
-				}
-				body := (*queued)[0].body
-				id, ok := body["id"].(string)
-				if !ok {
-					t.Fatalf("queued id = %#v, want a decimal string", body["id"])
-				}
-				if n, err := strconv.ParseUint(id, 10, 64); err != nil || n < 1 {
-					t.Errorf("queued id = %q, want a positive decimal integer", id)
-				}
-				delete(body, "id")
-				want := map[string]interface{}{"days_of_week": "mon,wed,fri", "start_time": 480.0, "end_time": 1020.0,
-					"enabled": true, "lat": 48.8566, "lon": 2.3522}
-				if !reflect.DeepEqual(body, want) {
-					t.Errorf("queued body (without id) = %v, want %v", body, want)
-				}
-			})
+	tests := []struct {
+		command string
+		rest    string
+		want    map[string]interface{}
+	}{
+		{"add_charge_schedule", `"days_of_week":"mon,wed,fri","start_time":480,"end_time":1020,"enabled":true,"lat":48.8566,"lon":2.3522`,
+			map[string]interface{}{"days_of_week": "mon,wed,fri", "start_time": 480.0, "end_time": 1020.0,
+				"enabled": true, "lat": 48.8566, "lon": 2.3522}},
+		{"add_precondition_schedule", `"days_of_week":"mon,wed,fri","precondition_time":450,"enabled":true,"lat":48.8566,"lon":2.3522`,
+			map[string]interface{}{"days_of_week": "mon,wed,fri", "precondition_time": 450.0,
+				"enabled": true, "lat": 48.8566, "lon": 2.3522}},
+	}
+	for _, tc := range tests {
+		for _, idPart := range []string{"", `"id":null,`, `"id":0,`} {
+			for _, query := range []string{"", "?wait=false", "?wait=true"} {
+				t.Run(tc.command+" "+idPart+query, func(t *testing.T) {
+					queued := stubQueue(t, func(r *models.ApiResponse) { r.Result = true })
+					rec := postCommand(t, tc.command, query, "{"+idPart+tc.rest+"}")
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+					}
+					if len(*queued) != 1 {
+						t.Fatalf("queued = %+v, want one command", *queued)
+					}
+					if (*queued)[0].wait != (query == "?wait=true") {
+						t.Errorf("queued wait = %v, want %v", (*queued)[0].wait, query == "?wait=true")
+					}
+					body := (*queued)[0].body
+					id, ok := body["id"].(string)
+					if !ok {
+						t.Fatalf("queued id = %#v, want a decimal string", body["id"])
+					}
+					if n, err := strconv.ParseUint(id, 10, 64); err != nil || n < 1 {
+						t.Errorf("queued id = %q, want a positive decimal integer", id)
+					}
+					delete(body, "id")
+					if !reflect.DeepEqual(body, tc.want) {
+						t.Errorf("queued body (without id) = %v, want %v", body, tc.want)
+					}
+				})
+			}
 		}
 	}
 }

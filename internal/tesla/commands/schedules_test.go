@@ -3,9 +3,11 @@ package commands
 import (
 	"context"
 	"errors"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -432,5 +434,175 @@ func TestCoordinateArg(t *testing.T) {
 				t.Errorf("coordinateArg error = %v, want %q", err, tt.reason)
 			}
 		})
+	}
+}
+
+// preconditionCall builds the AddPreconditionSchedule call expected for the usual cases.
+func preconditionCall(id, days, minutes string) string {
+	return "AddPreconditionSchedule(id=" + id + ",days=" + days + ",time=" + minutes +
+		",one_time=false,enabled=true,lat=1,lon=2,name=\"\")"
+}
+
+// preconditionBodyCases are the add_precondition_schedule rows of TestCommandBodies (UC1022). The
+// generated id is 1767225600 (frozen clock).
+var preconditionBodyCases = []bodyCase{
+	// Teslemetry body, id kept.
+	{"add_precondition_schedule", `{"id":3,"days_of_week":"Weekdays","precondition_time":450,"one_time":false,"enabled":true,"lat":48.8566,"lon":2.3522,"name":"Work"}`,
+		"AddPreconditionSchedule(id=3,days=0111110,time=450,one_time=false,enabled=true,lat=48.8566,lon=2.3522,name=\"\")", ""},
+	// id generated when absent, null or 0; a large id as a string is kept.
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":60,"enabled":true,"lat":1,"lon":2}`,
+		preconditionCall("1767225600", "1111111", "60"), ""},
+	{"add_precondition_schedule", `{"id":0,"days_of_week":"all","precondition_time":60,"enabled":true,"lat":1,"lon":2}`,
+		preconditionCall("1767225600", "1111111", "60"), ""},
+	{"add_precondition_schedule", `{"id":null,"days_of_week":"all","precondition_time":60,"enabled":true,"lat":1,"lon":2}`,
+		preconditionCall("1767225600", "1111111", "60"), ""},
+	{"add_precondition_schedule", `{"id":"9007199254740993","days_of_week":"all","precondition_time":60,"enabled":true,"lat":1,"lon":2}`,
+		preconditionCall("9007199254740993", "1111111", "60"), ""},
+	// days_of_week forms, bounds, flags.
+	{"add_precondition_schedule", `{"id":1,"days_of_week":62,"precondition_time":0,"enabled":true,"lat":1,"lon":2}`,
+		preconditionCall("1", "0111110", "0"), ""},
+	{"add_precondition_schedule", `{"id":1,"days_of_week":"62","precondition_time":1439,"enabled":true,"lat":1,"lon":2}`,
+		preconditionCall("1", "0111110", "1439"), ""},
+	{"add_precondition_schedule", `{"id":1,"days_of_week":" Sun , SATURDAY ","precondition_time":"450","enabled":true,"lat":"1","lon":"2"}`,
+		preconditionCall("1", "1000001", "450"), ""},
+	{"add_precondition_schedule", `{"id":1,"days_of_week":"all","precondition_time":60,"one_time":true,"enabled":false,"lat":-33.86,"lon":151.2}`,
+		"AddPreconditionSchedule(id=1,days=1111111,time=60,one_time=true,enabled=false,lat=-33.86,lon=151.2,name=\"\")", ""},
+
+	// Refused (the first faulty field wins, in the order of preconditionSchedule).
+	{"add_precondition_schedule", ``, "", "invalid request body: days_of_week missing"},
+	{"add_precondition_schedule", `{}`, "", "invalid request body: days_of_week missing"},
+	{"add_precondition_schedule", `{"id":-1,"days_of_week":"x"}`, "", "invalid request body: id must be a non-negative integer"},
+	{"add_precondition_schedule", `{"days_of_week":"x","precondition_time":"abc"}`, "", "invalid request body: days_of_week contains an unknown day name"},
+	{"add_precondition_schedule", `{"days_of_week":"all"}`, "", "invalid request body: precondition_time missing"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":1440}`, "", "invalid request body: precondition_time must be an integer between 0 and 1439"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":-1}`, "", "invalid request body: precondition_time must be an integer between 0 and 1439"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":450.5}`, "", "invalid request body: precondition_time must be an integer between 0 and 1439"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":"07:30"}`, "", "invalid request body: precondition_time is not a valid integer"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":60,"one_time":"maybe"}`, "", "invalid request body: one_time is not a valid boolean"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":60,"lat":1,"lon":2}`, "", "invalid request body: enabled missing"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":60,"enabled":true,"lon":2}`, "", "invalid request body: lat missing"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":60,"enabled":true,"lat":1}`, "", "invalid request body: lon missing"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":60,"enabled":true,"lat":91,"lon":2}`, "", "invalid request body: lat must be between -90 and 90 degrees"},
+	{"add_precondition_schedule", `{"days_of_week":"all","precondition_time":60,"enabled":true,"lat":1,"lon":-181}`, "", "invalid request body: lon must be between -180 and 180 degrees"},
+}
+
+// departureBodyCases are the set_scheduled_departure rows of TestCommandBodies (UC1022, D-1022-04, D-1022-09).
+var departureBodyCases = []bodyCase{
+	// Preconditioning only, all days; weekdays only.
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"preconditioning_enabled":true}`,
+		"ScheduleDeparture(7h30m0s,0s,AllDays,Off)", ""},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"preconditioning_enabled":true,"preconditioning_weekdays_only":true}`,
+		"ScheduleDeparture(7h30m0s,0s,Weekdays,Off)", ""},
+	// Off-peak only, then both.
+	{"set_scheduled_departure", `{"enable":true,"departure_time":420,"off_peak_charging_enabled":true,"end_off_peak_time":360}`,
+		"ScheduleDeparture(7h0m0s,6h0m0s,Off,AllDays)", ""},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":420,"preconditioning_enabled":true,"off_peak_charging_enabled":true,"off_peak_charging_weekdays_only":true,"end_off_peak_time":360}`,
+		"ScheduleDeparture(7h0m0s,6h0m0s,AllDays,Weekdays)", ""},
+	{"set_scheduled_departure", `{"enable":"true","departure_time":"1439","preconditioning_enabled":"1","off_peak_charging_enabled":"true","end_off_peak_time":"0"}`,
+		"ScheduleDeparture(23h59m0s,0s,AllDays,AllDays)", ""},
+	// end_off_peak_time is transmitted even with off-peak charging disabled.
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"preconditioning_enabled":true,"end_off_peak_time":300}`,
+		"ScheduleDeparture(7h30m0s,5h0m0s,AllDays,Off)", ""},
+	// Departure alone, and weekdays_only without its enabled flag (ignored, D-1022-04).
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450}`, "ScheduleDeparture(7h30m0s,0s,Off,Off)", ""},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"preconditioning_weekdays_only":true}`,
+		"ScheduleDeparture(7h30m0s,0s,Off,Off)", ""},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"off_peak_charging_weekdays_only":true}`,
+		"ScheduleDeparture(7h30m0s,0s,Off,Off)", ""},
+	// enable false clears, whatever the valid rest (D-1022-09).
+	{"set_scheduled_departure", `{"enable":false}`, "ClearScheduledDeparture", ""},
+	{"set_scheduled_departure", `{"enable":false,"departure_time":450,"preconditioning_enabled":true,"preconditioning_weekdays_only":true,"off_peak_charging_enabled":true,"end_off_peak_time":360}`,
+		"ClearScheduledDeparture", ""},
+
+	// Refused.
+	{"set_scheduled_departure", ``, "", "invalid request body: enable missing"},
+	{"set_scheduled_departure", `{}`, "", "invalid request body: enable missing"},
+	{"set_scheduled_departure", `{"enable":"yes"}`, "", "invalid request body: enable is not a valid boolean"},
+	{"set_scheduled_departure", `{"enable":true}`, "", "invalid request body: departure_time missing"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":null}`, "", "invalid request body: departure_time missing"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"off_peak_charging_enabled":true}`, "", "invalid request body: end_off_peak_time missing"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":1440}`, "", "invalid request body: departure_time must be an integer between 0 and 1439"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":-1}`, "", "invalid request body: departure_time must be an integer between 0 and 1439"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450.5}`, "", "invalid request body: departure_time must be an integer between 0 and 1439"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":"07:30"}`, "", "invalid request body: departure_time is not a valid integer"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"end_off_peak_time":1440}`, "", "invalid request body: end_off_peak_time must be an integer between 0 and 1439"},
+	{"set_scheduled_departure", `{"enable":true,"preconditioning_enabled":1,"departure_time":2000}`, "", `invalid request body: preconditioning_enabled must be a boolean or "true"/"false"`},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"preconditioning_weekdays_only":"maybe"}`, "", "invalid request body: preconditioning_weekdays_only is not a valid boolean"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"off_peak_charging_enabled":"maybe"}`, "", "invalid request body: off_peak_charging_enabled is not a valid boolean"},
+	{"set_scheduled_departure", `{"enable":true,"departure_time":450,"off_peak_charging_weekdays_only":"maybe"}`, "", "invalid request body: off_peak_charging_weekdays_only is not a valid boolean"},
+	{"set_scheduled_departure", `{"enable":false,"departure_time":"abc"}`, "", "invalid request body: departure_time is not a valid integer"},
+	{"set_scheduled_departure", `{"enable":false,"end_off_peak_time":1440}`, "", "invalid request body: end_off_peak_time must be an integer between 0 and 1439"},
+}
+
+// departurePolicy: weekdays_only is ignored when the policy is disabled.
+func TestDeparturePolicy(t *testing.T) {
+	tests := []struct {
+		enabled, weekdaysOnly bool
+		want                  string
+	}{
+		{false, false, "Off"},
+		{false, true, "Off"},
+		{true, false, "AllDays"},
+		{true, true, "Weekdays"},
+	}
+	for _, tt := range tests {
+		if got := sdkPolicyName(departurePolicy(tt.enabled, tt.weekdaysOnly)); got != tt.want {
+			t.Errorf("departurePolicy(%t, %t) = %s, want %s", tt.enabled, tt.weekdaysOnly, got, tt.want)
+		}
+	}
+}
+
+// add_precondition_schedule refuses to reach the vehicle with an id that was not prepared.
+func TestAddPreconditionScheduleUnpreparedID(t *testing.T) {
+	car := &fakeCar{}
+	body := decodeBody(t, `{"days_of_week":"all","precondition_time":60,"enabled":true,"lat":1,"lon":2}`)
+	retry, err := fleetVehicleCommands["add_precondition_schedule"].run(context.Background(), car, body)
+	if err == nil || err.Error() != "precondition schedule id was not prepared" || errors.Is(err, ErrInvalidBody) || len(car.calls) != 0 {
+		t.Errorf("run = (%t, %v), calls %v, want the not prepared error without vehicle call", retry, err, car.calls)
+	}
+}
+
+// UC1022: the precondition id is generated once on a copy; the charge and precondition schedules
+// share the generator; the other commands of the UC are left untouched.
+func TestPreparePreconditionBody(t *testing.T) {
+	freezeScheduleIDs(t, frozenScheduleUnix)
+	for i, idPart := range []string{"", `"id":null,`, `"id":0,`, `"id":"0",`} {
+		body := decodeBody(t, `{`+idPart+`"days_of_week":"all","precondition_time":60,"enabled":true,"lat":1,"lon":2}`)
+		original := maps.Clone(body)
+		prepared := PrepareCommandBody("add_precondition_schedule", body)
+		wantID := strconv.FormatUint(frozenScheduleUnix+uint64(i), 10)
+		if prepared["id"] != wantID {
+			t.Errorf("%q: prepared id = %#v, want %q", idPart, prepared["id"], wantID)
+		}
+		rest := maps.Clone(prepared)
+		delete(rest, "id")
+		wantRest := maps.Clone(original)
+		delete(wantRest, "id")
+		if !reflect.DeepEqual(rest, wantRest) {
+			t.Errorf("%q: other keys changed: %v, want %v", idPart, rest, wantRest)
+		}
+		if !reflect.DeepEqual(body, original) {
+			t.Errorf("%q: PrepareCommandBody modified its argument: %v", idPart, body)
+		}
+	}
+
+	withID := decodeBody(t, `{"id":42,"days_of_week":"all","precondition_time":60,"enabled":true,"lat":1,"lon":2}`)
+	if got := PrepareCommandBody("add_precondition_schedule", withID); !reflect.DeepEqual(got, withID) {
+		t.Errorf("a body with an id changed: %v", got)
+	}
+
+	freezeScheduleIDs(t, frozenScheduleUnix)
+	charge := PrepareCommandBody("add_charge_schedule", decodeBody(t, `{"days_of_week":"all","start_time":1,"enabled":true,"lat":1,"lon":2}`))
+	precondition := PrepareCommandBody("add_precondition_schedule", decodeBody(t, `{"days_of_week":"all","precondition_time":1,"enabled":true,"lat":1,"lon":2}`))
+	if charge["id"] != "1767225600" || precondition["id"] != "1767225601" {
+		t.Errorf("shared generator: charge id %v, precondition id %v, want 1767225600 then 1767225601", charge["id"], precondition["id"])
+	}
+
+	for _, name := range []string{"charge_max_range", "charge_standard", "schedule_software_update", "cancel_software_update",
+		"adjust_volume", "media_toggle_playback", "remove_precondition_schedule", "set_scheduled_departure"} {
+		in := map[string]interface{}{"id": 0.0}
+		if got := PrepareCommandBody(name, in); !reflect.DeepEqual(got, in) {
+			t.Errorf("PrepareCommandBody(%q) changed the body: %v", name, got)
+		}
 	}
 }

@@ -204,6 +204,15 @@ The program uses the same interfaces as the Tesla [Fleet API](https://developer.
 - add_charge_schedule (superdcat fork)
 - remove_charge_schedule (superdcat fork)
 - set_scheduled_charging (superdcat fork)
+- charge_max_range (superdcat fork)
+- charge_standard (superdcat fork)
+- schedule_software_update (superdcat fork)
+- cancel_software_update (superdcat fork)
+- adjust_volume (superdcat fork)
+- media_toggle_playback (superdcat fork)
+- add_precondition_schedule (superdcat fork)
+- remove_precondition_schedule (superdcat fork)
+- set_scheduled_departure (superdcat fork)
 
 By default, the program will return immediately after sending the command to the vehicle. If you want to wait for the command to complete, you can set the `wait` parameter to `true`.
 
@@ -303,7 +312,18 @@ Set the scheduled charging (superdcat fork):
 
 `id` identifies the schedule (an existing `id` is updated, not duplicated) and is optional. If it is absent, `null` or 0, the proxy generates one when the command is queued (the Unix time in seconds, one more if two are generated in the same second): the retries of the command reuse it. It is **not returned** in the response: it is written in the logs ("Generated charge schedule id", "Executing command"). **Send your own `id`** (for example the Unix time: a JSON number up to 9007199254740991, or a decimal string up to 18446744073709551615), keep it, and use it to remove the schedule; a client that resends a request without `id` after a lost answer creates a second schedule. The existing schedules, with their `id`, are read with the `charge_schedule_data` vehicle data endpoint (after the `vehicleDataCacheTime` cache expires).
 
-`remove_charge_schedule` requires `id` (1 or more). `set_scheduled_charging` requires `enable`; `time` (0 to 1439, minutes after midnight) is required when `enable` is true. Tesla recommends against `set_scheduled_charging` since firmware 2024.26 (prefer `add_charge_schedule`); the vehicle may accept it without effect. These commands wake the vehicle up like the others and are expected to need the Charging Manager or Owner role (to be confirmed on a vehicle). The proxy **logs the request body in clear text, coordinates included** (logs and `/api/logs`, which is open when no `apiToken` is set): set an `apiToken`.
+`remove_charge_schedule` or `remove_precondition_schedule` requires `id` (1 or more). `set_scheduled_charging` requires `enable`; `time` (0 to 1439, minutes after midnight) is required when `enable` is true. Tesla recommends against `set_scheduled_charging` since firmware 2024.26 (prefer `add_charge_schedule`); the vehicle may accept it without effect. These commands wake the vehicle up like the others and are expected to need the Charging Manager or Owner role (to be confirmed on a vehicle). The proxy **logs the request body in clear text, coordinates included** (logs and `/api/logs`, which is open when no `apiToken` is set): set an `apiToken`.
+
+Complementary commands (superdcat fork), all sent to the vehicle like the others (it is woken up if needed):
+
+- `charge_max_range` and `charge_standard` (no body): charge up to the maximum or the standard range. They are expected to need the Charging Manager or Owner role (same vehicle message as `charge_start`; to be confirmed on a vehicle). `charge_standard` answers with a success when the vehicle says `already_started` (the charge limit is already at or below the standard limit): this text is documented by the Fleet API but is not in the SDK, **to be confirmed on a vehicle**.
+- `schedule_software_update` with body `{"offset_sec": 3600}` and `cancel_software_update` (no body). `offset_sec` is required, an integer from 0 to 2147483647 as a number or a string without spaces. 0 starts the installation right after the countdown of the vehicle, and it cannot be cancelled once started. Owner role expected.
+- `adjust_volume` with body `{"volume": 5}`: `volume` is required, a number from 0 to 10 (decimals and numeric strings accepted, spaces ignored). The Fleet API documents 0 to 11, but the SDK refuses more than 10 over BLE: a larger value is refused with HTTP 503 instead of being lowered. The vehicle needs a user present (Fleet API). Owner role expected.
+- `media_toggle_playback` (no body): toggles play and pause. As it is a toggle it is **never retried** after a failure, and with `wait=false` a failure is not reported to the client. Owner role expected.
+- `add_precondition_schedule` with body `{"id": 1767225600, "days_of_week": "mon,wed,fri", "precondition_time": 450, "enabled": true, "lat": 48.8566, "lon": 2.3522}` and `remove_precondition_schedule` with body `{"id": 1767225600}`. Same rules as the charge schedules (`days_of_week`, `id`, `lat`/`lon`, generated `id` written in the logs as "Generated precondition schedule id", the generator is shared): `precondition_time` is required (0 to 1439, minutes after midnight), `enabled`, `lat` and `lon` are required, `one_time` is optional, `name` is ignored. The coordinates are logged in clear text with the request (set an `apiToken`). A schedule you add or remove only shows up in `preconditioning_schedule_data` after the cache expires. Owner role expected.
+- `set_scheduled_departure` with body `{"enable": true, "departure_time": 450, "preconditioning_enabled": true, "preconditioning_weekdays_only": false, "off_peak_charging_enabled": true, "off_peak_charging_weekdays_only": false, "end_off_peak_time": 360}`: `enable` is required; `false` clears the scheduled departure. With `enable` true, `departure_time` (0 to 1439, minutes after midnight) is required, and `end_off_peak_time` (0 to 1439) when `off_peak_charging_enabled` is true; the other fields are optional booleans (false when absent). A `*_weekdays_only` is **ignored** when its `*_enabled` is false (on purpose, unlike the official proxy where `weekdays_only` alone means weekdays). Types and ranges of every field present are checked even when `enable` is false, then ignored. Tesla recommends against it since firmware 2024.26 (prefer the schedules); the vehicle may accept it without effect. Owner role expected.
+
+For the commands without body any body is ignored. An invalid body is refused with HTTP 503 `invalid request body: ...` before the command is queued, with or without `wait`.
 
 ### Vehicle Data
 

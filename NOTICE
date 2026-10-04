@@ -21,10 +21,12 @@ steering wheel heater commands remote_seat_heater_request, remote_seat_cooler_re
 remote_auto_seat_climate_request and remote_steering_wheel_heater_request, adapted
 (commit 94d1fd8); trunk and window commands actuate_trunk and window_control, adapted
 (commit 94d1fd8); charge schedule commands add_charge_schedule and set_scheduled_charging,
-adapted (commits 8bf65b8, c68b8ee); BLE connection status route connection_status,
-adapted (commits 6ca3e0e, b971a05); choice of the Bluetooth adapter with btAdapter, adapted
-(commit feadd14). Each ported change
-references the original Lenart12 commit in its commit message.
+adapted (commits 8bf65b8, c68b8ee); max range and standard charging, software update, volume
+and media playback commands charge_max_range, charge_standard, schedule_software_update,
+cancel_software_update, adjust_volume and media_toggle_playback, adapted (commit 94d1fd8);
+BLE connection status route connection_status, adapted (commits 6ca3e0e, b971a05); choice of
+the Bluetooth adapter with btAdapter, adapted (commit feadd14). Each ported change references
+the original Lenart12 commit in its commit message.
 
 Changes made in this fork are recorded in the git history of this repository.
 See LICENSE for the full license text.

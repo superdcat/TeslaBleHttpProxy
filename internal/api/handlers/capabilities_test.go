@@ -193,3 +193,30 @@ func TestCapabilitiesAnnounceVehicleDataEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// UC1022 AC5: the nine complementary commands are announced, written out and read through the route.
+func TestCapabilitiesAnnounceUC1022Commands(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var ret struct {
+		Response struct {
+			Response struct {
+				Commands []string `json:"commands"`
+			} `json:"response"`
+		} `json:"response"`
+	}
+	rec := getCapabilities(t, "capabilities")
+	if err := json.Unmarshal(rec.Body.Bytes(), &ret); err != nil {
+		t.Fatalf("invalid JSON %q: %v", rec.Body.String(), err)
+	}
+	got := ret.Response.Response.Commands
+	for _, want := range []string{
+		"charge_max_range", "charge_standard", "schedule_software_update", "cancel_software_update",
+		"adjust_volume", "media_toggle_playback",
+		"add_precondition_schedule", "remove_precondition_schedule", "set_scheduled_departure",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("commands %v does not contain %q", got, want)
+		}
+	}
+}

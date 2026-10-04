@@ -119,6 +119,49 @@ func (f *fakeCar) ScheduleCharging(_ context.Context, enabled bool, after time.D
 	return f.record(fmt.Sprintf("ScheduleCharging(%t,%s)", enabled, after))
 }
 
+// UC1022.
+func (f *fakeCar) ChargeMaxRange(context.Context) error      { return f.record("ChargeMaxRange") }
+func (f *fakeCar) ChargeStandardRange(context.Context) error { return f.record("ChargeStandardRange") }
+func (f *fakeCar) CancelSoftwareUpdate(context.Context) error {
+	return f.record("CancelSoftwareUpdate")
+}
+func (f *fakeCar) ToggleMediaPlayback(context.Context) error { return f.record("ToggleMediaPlayback") }
+func (f *fakeCar) ClearScheduledDeparture(context.Context) error {
+	return f.record("ClearScheduledDeparture")
+}
+func (f *fakeCar) ScheduleSoftwareUpdate(_ context.Context, delay time.Duration) error {
+	return f.record(fmt.Sprintf("ScheduleSoftwareUpdate(%s)", delay))
+}
+func (f *fakeCar) SetVolume(_ context.Context, volume float32) error {
+	return f.record(fmt.Sprintf("SetVolume(%g)", volume))
+}
+func (f *fakeCar) RemovePreconditionSchedule(_ context.Context, id uint64) error {
+	return f.record(fmt.Sprintf("RemovePreconditionSchedule(%d)", id))
+}
+
+// AddPreconditionSchedule records every field through the protobuf getters.
+func (f *fakeCar) AddPreconditionSchedule(_ context.Context, s *vehicle.PreconditionSchedule) error {
+	return f.record(fmt.Sprintf("AddPreconditionSchedule(id=%d,days=%07b,time=%d,one_time=%t,enabled=%t,lat=%g,lon=%g,name=%q)",
+		s.GetId(), s.GetDaysOfWeek(), s.GetPreconditionTime(), s.GetOneTime(), s.GetEnabled(),
+		s.GetLatitude(), s.GetLongitude(), s.GetName()))
+}
+func (f *fakeCar) ScheduleDeparture(_ context.Context, departAt, offPeakEnd time.Duration, pre, off vehicle.ChargingPolicy) error {
+	return f.record(fmt.Sprintf("ScheduleDeparture(%s,%s,%s,%s)", departAt, offPeakEnd, sdkPolicyName(pre), sdkPolicyName(off)))
+}
+
+// sdkPolicyName names an SDK charging policy constant by hand, so that departurePolicy is not its own oracle.
+func sdkPolicyName(policy vehicle.ChargingPolicy) string {
+	switch policy {
+	case vehicle.ChargingPolicyOff:
+		return "Off"
+	case vehicle.ChargingPolicyAllDays:
+		return "AllDays"
+	case vehicle.ChargingPolicyWeekdays:
+		return "Weekdays"
+	}
+	return fmt.Sprintf("policy(%d)", int(policy))
+}
+
 // sdkSeatName names an SDK seat constant by hand (the SDK has no String()).
 func sdkSeatName(seat vehicle.SeatPosition) string {
 	switch seat {
@@ -527,6 +570,9 @@ func TestCommandBodies(t *testing.T) {
 		{"window_control", `{"command":"vent","lon":"1e999"}`, "", "invalid request body: lon is out of range"},
 	}
 	tests = append(tests, scheduleBodyCases...)
+	tests = append(tests, complementaryBodyCases...)
+	tests = append(tests, preconditionBodyCases...)
+	tests = append(tests, departureBodyCases...)
 
 	covered := map[string]bool{}
 	for _, tt := range tests {
@@ -642,6 +688,16 @@ func TestAddedCommandsVehicleErrors(t *testing.T) {
 		{"add_charge_schedule", `{"id":5,"days_of_week":"all","start_time":60,"enabled":true,"lat":1,"lon":2}`, "failed to add charge schedule 5: " + vehicleFault},
 		{"remove_charge_schedule", `{"id":"9"}`, "failed to remove charge schedule 9: " + vehicleFault},
 		{"set_scheduled_charging", `{"enable":true,"time":60}`, "failed to set scheduled charging: " + vehicleFault},
+		// UC1022 (media_toggle_playback is not retried: TestToggleVehicleErrorNotRetried).
+		{"charge_max_range", "", "failed to charge in max range mode: " + vehicleFault},
+		{"charge_standard", "", "failed to charge in standard mode: " + vehicleFault},
+		{"schedule_software_update", `{"offset_sec":"3600"}`, "failed to schedule software update in 3600 s: " + vehicleFault},
+		{"cancel_software_update", "", "failed to cancel software update: " + vehicleFault},
+		{"adjust_volume", `{"volume":5.5}`, "failed to set volume to 5.5: " + vehicleFault},
+		{"add_precondition_schedule", `{"id":5,"days_of_week":"all","precondition_time":450,"enabled":true,"lat":1,"lon":2}`, "failed to add precondition schedule 5: " + vehicleFault},
+		{"remove_precondition_schedule", `{"id":"9"}`, "failed to remove precondition schedule 9: " + vehicleFault},
+		{"set_scheduled_departure", `{"enable":true,"departure_time":450}`, "failed to set scheduled departure: " + vehicleFault},
+		{"set_scheduled_departure", `{"enable":false}`, "failed to clear scheduled departure: " + vehicleFault},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command+" "+tt.body, func(t *testing.T) { assertVehicleError(t, tt.command, tt.body, tt.want) })
@@ -837,6 +893,10 @@ func TestAlreadyDoneErrorsAreSuccess(t *testing.T) {
 		{"charge_start", "not_charging", true},
 		{"charge_stop", "not_charging", false},
 		{"charge_stop", "is_charging", true},
+		// UC1022: only charge_standard documents already_started.
+		{"charge_standard", "already_started", false},
+		{"charge_standard", "is_charging", true},
+		{"charge_max_range", "already_started", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command+" "+tt.refusal, func(t *testing.T) {
@@ -897,10 +957,13 @@ func TestFleetCommandNamesFloor(t *testing.T) {
 		"remote_seat_heater_request", "remote_seat_cooler_request", "remote_auto_seat_climate_request", "remote_steering_wheel_heater_request",
 		"actuate_trunk", "window_control",
 		"add_charge_schedule", "remove_charge_schedule", "set_scheduled_charging",
+		"charge_max_range", "charge_standard", "schedule_software_update", "cancel_software_update",
+		"adjust_volume", "media_toggle_playback",
+		"add_precondition_schedule", "remove_precondition_schedule", "set_scheduled_departure",
 	}
 	names := FleetCommandNames()
-	if len(names) < 29 {
-		t.Errorf("FleetCommandNames() has %d names, want at least 29", len(names))
+	if len(names) < 38 {
+		t.Errorf("FleetCommandNames() has %d names, want at least 38", len(names))
 	}
 	for _, name := range floor {
 		if !slices.Contains(names, name) {
@@ -909,13 +972,27 @@ func TestFleetCommandNamesFloor(t *testing.T) {
 	}
 }
 
-// UC1013: actuate_trunk toggles, so a rear failure is not retried; front and the idempotent
-// commands keep the retries. Only actuate_trunk carries notRetried.
+// UC1013, UC1022: actuate_trunk and media_toggle_playback toggle, so their failure is not retried
+// (actuate_trunk: rear only); the idempotent commands keep the retries. Only these two carry notRetried.
 func TestToggleVehicleErrorNotRetried(t *testing.T) {
 	for name, handler := range fleetVehicleCommands {
-		if (handler.notRetried != nil) != (name == "actuate_trunk") {
+		if want := name == "actuate_trunk" || name == "media_toggle_playback"; (handler.notRetried != nil) != want {
 			t.Errorf("command %q: notRetried set = %t", name, handler.notRetried != nil)
 		}
+	}
+	for _, body := range []commandArgs{nil, {}, {"x": 1.0}} {
+		if !fleetVehicleCommands["media_toggle_playback"].notRetried(body) {
+			t.Errorf("media_toggle_playback notRetried(%v) = false, want true", body)
+		}
+	}
+	mediaCar := &fakeCar{err: &protocol.RoutableMessageError{Code: universalmessage.MessageFault_E_MESSAGEFAULT_ERROR_INSUFFICIENT_PRIVILEGES}}
+	retry, mediaErr := fleetVehicleCommands["media_toggle_playback"].run(context.Background(), mediaCar, nil)
+	if want := "failed to toggle media playback (not retried, it is a toggle): " + vehicleFault; mediaErr == nil || mediaErr.Error() != want {
+		t.Fatalf("media_toggle_playback error = %v, want %q", mediaErr, want)
+	}
+	var routable *protocol.RoutableMessageError
+	if retry || !errors.As(mediaErr, &routable) || !slices.Equal(mediaCar.calls, []string{"ToggleMediaPlayback"}) {
+		t.Errorf("media_toggle_playback: retry = %t, calls = %v, error %v", retry, mediaCar.calls, mediaErr)
 	}
 	tests := []struct {
 		body      string
@@ -1036,5 +1113,90 @@ func TestOptCoordinateArg(t *testing.T) {
 				t.Errorf("optCoordinateArg error = %v, want %q", err, tt.reason)
 			}
 		})
+	}
+}
+
+// complementaryBodyCases are the simple UC1022 rows of TestCommandBodies (AC1, AC2, AC3, AC4).
+var complementaryBodyCases = []bodyCase{
+	// Commands without body: any body, even unreadable, is ignored (2.3.0 behavior).
+	{"charge_max_range", "", "ChargeMaxRange", ""},
+	{"charge_max_range", `{}`, "ChargeMaxRange", ""},
+	{"charge_max_range", `{"x":1}`, "ChargeMaxRange", ""},
+	{"charge_standard", "", "ChargeStandardRange", ""},
+	{"charge_standard", `{}`, "ChargeStandardRange", ""},
+	{"charge_standard", `{"x":1}`, "ChargeStandardRange", ""},
+	{"cancel_software_update", "", "CancelSoftwareUpdate", ""},
+	{"cancel_software_update", `{}`, "CancelSoftwareUpdate", ""},
+	{"cancel_software_update", `{"x":1}`, "CancelSoftwareUpdate", ""},
+	{"media_toggle_playback", "", "ToggleMediaPlayback", ""},
+	{"media_toggle_playback", `{}`, "ToggleMediaPlayback", ""},
+	{"media_toggle_playback", `{"x":1}`, "ToggleMediaPlayback", ""},
+
+	// schedule_software_update: integer 0..2147483647, number or string without spaces.
+	{"schedule_software_update", `{"offset_sec":0}`, "ScheduleSoftwareUpdate(0s)", ""},
+	{"schedule_software_update", `{"offset_sec":3600}`, "ScheduleSoftwareUpdate(1h0m0s)", ""},
+	{"schedule_software_update", `{"offset_sec":"120"}`, "ScheduleSoftwareUpdate(2m0s)", ""},
+	{"schedule_software_update", `{"offset_sec":60.0}`, "ScheduleSoftwareUpdate(1m0s)", ""},
+	{"schedule_software_update", `{"offset_sec":2147483647}`, "ScheduleSoftwareUpdate(596523h14m7s)", ""},
+	{"schedule_software_update", ``, "", "invalid request body: offset_sec missing"},
+	{"schedule_software_update", `{}`, "", "invalid request body: offset_sec missing"},
+	{"schedule_software_update", `{"offset_sec":null}`, "", "invalid request body: offset_sec missing"},
+	{"schedule_software_update", `{"offset_sec":"abc"}`, "", "invalid request body: offset_sec is not a valid integer"},
+	{"schedule_software_update", `{"offset_sec":"1h"}`, "", "invalid request body: offset_sec is not a valid integer"},
+	{"schedule_software_update", `{"offset_sec":" 60"}`, "", "invalid request body: offset_sec is not a valid integer"},
+	{"schedule_software_update", `{"offset_sec":true}`, "", "invalid request body: offset_sec must be a number or a numeric string"},
+	{"schedule_software_update", `{"offset_sec":-1}`, "", "invalid request body: offset_sec must be an integer between 0 and 2147483647"},
+	{"schedule_software_update", `{"offset_sec":1.5}`, "", "invalid request body: offset_sec must be an integer between 0 and 2147483647"},
+	{"schedule_software_update", `{"offset_sec":"-1"}`, "", "invalid request body: offset_sec must be an integer between 0 and 2147483647"},
+	{"schedule_software_update", `{"offset_sec":2147483648}`, "", "invalid request body: offset_sec is out of range"},
+	{"schedule_software_update", `{"offset_sec":"3000000000"}`, "", "invalid request body: offset_sec is out of range"},
+	{"schedule_software_update", `{"offset_sec":3e9}`, "", "invalid request body: offset_sec is out of range"},
+
+	// adjust_volume: number 0-10 (the SDK refuses more over BLE), decimals and numeric strings.
+	{"adjust_volume", `{"volume":0}`, "SetVolume(0)", ""},
+	{"adjust_volume", `{"volume":10}`, "SetVolume(10)", ""},
+	{"adjust_volume", `{"volume":5.5}`, "SetVolume(5.5)", ""},
+	{"adjust_volume", `{"volume":"3.25"}`, "SetVolume(3.25)", ""},
+	{"adjust_volume", `{"volume":" 7 "}`, "SetVolume(7)", ""},
+	{"adjust_volume", ``, "", "invalid request body: volume missing"},
+	{"adjust_volume", `{}`, "", "invalid request body: volume missing"},
+	{"adjust_volume", `{"volume":null}`, "", "invalid request body: volume missing"},
+	{"adjust_volume", `{"volume":99}`, "", "invalid request body: volume must be between 0 and 10"},
+	{"adjust_volume", `{"volume":11}`, "", "invalid request body: volume must be between 0 and 10"},
+	{"adjust_volume", `{"volume":10.01}`, "", "invalid request body: volume must be between 0 and 10"},
+	{"adjust_volume", `{"volume":10.0000000001}`, "", "invalid request body: volume must be between 0 and 10"},
+	{"adjust_volume", `{"volume":-0.5}`, "", "invalid request body: volume must be between 0 and 10"},
+	{"adjust_volume", `{"volume":"abc"}`, "", "invalid request body: volume is not a valid number"},
+	{"adjust_volume", `{"volume":"NaN"}`, "", "invalid request body: volume is not a valid number"},
+	{"adjust_volume", `{"volume":"5,5"}`, "", "invalid request body: volume is not a valid number"},
+	{"adjust_volume", `{"volume":"1e999"}`, "", "invalid request body: volume is out of range"},
+	{"adjust_volume", `{"volume":true}`, "", "invalid request body: volume must be a number or a numeric string"},
+
+	// remove_precondition_schedule: id >= 1, number or decimal string.
+	{"remove_precondition_schedule", `{"id":7}`, "RemovePreconditionSchedule(7)", ""},
+	{"remove_precondition_schedule", `{"id":"7"}`, "RemovePreconditionSchedule(7)", ""},
+	{"remove_precondition_schedule", `{"id":"18446744073709551615"}`, "RemovePreconditionSchedule(18446744073709551615)", ""},
+	{"remove_precondition_schedule", ``, "", "invalid request body: id missing"},
+	{"remove_precondition_schedule", `{}`, "", "invalid request body: id missing"},
+	{"remove_precondition_schedule", `{"id":0}`, "", "invalid request body: id must be a positive integer"},
+	{"remove_precondition_schedule", `{"id":"abc"}`, "", "invalid request body: id is not a valid integer"},
+}
+
+// UC1022: the dangerous or out-of-scope commands stay unsupported and unannounced.
+func TestDangerousCommandsStayExcluded(t *testing.T) {
+	for _, name := range []string{
+		"remote_start_drive", "set_pin_to_drive", "clear_pin_to_drive_admin", "reset_pin_to_drive_pin",
+		"set_valet_mode", "reset_valet_pin", "speed_limit_activate", "speed_limit_deactivate",
+		"speed_limit_set_limit", "speed_limit_clear_pin", "guest_mode", "erase_user_data", "trigger_homelink",
+		"set_vehicle_name", "navigation_request", "navigation_gps_request", "navigation_sc_request",
+		"media_next_track", "media_prev_track", "media_next_fav", "media_prev_fav",
+		"media_volume_up", "media_volume_down", "remote_boombox",
+	} {
+		if IsSupportedCommand(name) {
+			t.Errorf("IsSupportedCommand(%q) = true, want false", name)
+		}
+		if slices.Contains(FleetCommandNames(), name) {
+			t.Errorf("FleetCommandNames() contains %q", name)
+		}
 	}
 }

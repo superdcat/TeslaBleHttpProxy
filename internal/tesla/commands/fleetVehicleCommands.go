@@ -10,7 +10,8 @@
 // tables (Lenart12 shifted the seat heater by one), vehicle behind an interface for tests.
 // set_temps follows the contract of wimaha/TeslaBleHttpProxy PR #162; actuate_trunk follows
 // the contract of wimaha PR #162 (rear not retried); add_charge_schedule follows the contract of
-// wimaha PR #153 (strictly typed, id generated once when queued).
+// wimaha PR #153 (strictly typed, id generated once when queued); adjust_volume is bounded to
+// the SDK range 0-10 instead of clamped, media_toggle_playback is not retried.
 
 package commands
 
@@ -65,6 +66,16 @@ type vehicleCommander interface {
 	AddChargeSchedule(ctx context.Context, schedule *vehicle.ChargeSchedule) error
 	RemoveChargeSchedule(ctx context.Context, id uint64) error
 	ScheduleCharging(ctx context.Context, enabled bool, timeAfterMidnight time.Duration) error
+	ChargeMaxRange(ctx context.Context) error
+	ChargeStandardRange(ctx context.Context) error
+	ScheduleSoftwareUpdate(ctx context.Context, delay time.Duration) error
+	CancelSoftwareUpdate(ctx context.Context) error
+	SetVolume(ctx context.Context, volume float32) error
+	ToggleMediaPlayback(ctx context.Context) error
+	AddPreconditionSchedule(ctx context.Context, schedule *vehicle.PreconditionSchedule) error
+	RemovePreconditionSchedule(ctx context.Context, id uint64) error
+	ScheduleDeparture(ctx context.Context, departAt, offPeakEndTime time.Duration, preconditioning, offpeak vehicle.ChargingPolicy) error
+	ClearScheduledDeparture(ctx context.Context) error
 }
 
 // Bounds of the cabin temperature setpoints, in degrees Celsius, inclusive (wimaha PR #162).
@@ -137,6 +148,15 @@ const (
 	maxLongitude = 180
 )
 
+// Bounds of adjust_volume, inclusive: the SDK (infotainment.go SetVolume) refuses a volume above
+// 10 over BLE, whereas the Fleet API documents 0-11. maxOffsetSec is the int32 limit of the SDK
+// cast in ScheduleSoftwareUpdate, not a business bound.
+const (
+	minVolume    = 0
+	maxVolume    = 10
+	maxOffsetSec = math.MaxInt32
+)
+
 var _ vehicleCommander = (*vehicle.Vehicle)(nil)
 
 // commandArgs is the decoded JSON body of a command (nil when absent or unreadable).
@@ -153,7 +173,8 @@ type commandHandler struct {
 	// checkError turns a vehicle error meaning "already done" into success (nil). Optional.
 	checkError func(err error) error
 	// notRetried, when set and true for the body, reports a vehicle error without retry: the action
-	// toggles a state (actuate_trunk rear), a retry after a lost reply would undo it (wimaha PR #162).
+	// toggles a state (actuate_trunk rear, media_toggle_playback which toggles unconditionally), a
+	// retry after a lost reply would undo it (wimaha PR #162).
 	notRetried func(args commandArgs) bool
 	// prepare completes the body once, when the command is queued (after validate, before the
 	// retries): it returns a copy and never modifies args. Optional; see PrepareCommandBody.
@@ -575,6 +596,131 @@ var fleetVehicleCommands = map[string]commandHandler{
 			return nil
 		},
 	},
+
+	// UC1022: complementary commands (charge_max_range, charge_standard, schedule_software_update,
+	// cancel_software_update, adjust_volume and media_toggle_playback ported from Lenart12 94d1fd8,
+	// adapted; add_precondition_schedule, remove_precondition_schedule and set_scheduled_departure
+	// written for the fork).
+	"charge_max_range": {
+		execute: func(ctx context.Context, car vehicleCommander, _ commandArgs) error {
+			if err := car.ChargeMaxRange(ctx); err != nil {
+				return fmt.Errorf("failed to charge in max range mode: %w", err)
+			}
+			return nil
+		},
+	},
+	"charge_standard": {
+		execute: func(ctx context.Context, car vehicleCommander, _ commandArgs) error {
+			if err := car.ChargeStandardRange(ctx); err != nil {
+				return fmt.Errorf("failed to charge in standard mode: %w", err)
+			}
+			return nil
+		},
+		checkError: func(err error) error {
+			// The Fleet API documents "already_started" when the charge limit is already at or below
+			// the standard limit; the text is not in the SDK, to be confirmed on a vehicle over BLE.
+			if strings.Contains(err.Error(), "already_started") {
+				logging.Info("The charge limit is already at or below the standard limit")
+				return nil
+			}
+			return err
+		},
+	},
+	"schedule_software_update": {
+		validate: func(args commandArgs) error {
+			_, err := args.intRangeArg("offset_sec", 0, maxOffsetSec)
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			offset, _ := args.intRangeArg("offset_sec", 0, maxOffsetSec) // validated by run
+			// Duration times Second, never offset*int(time.Second): int is 32 bits on ARMv6/v7.
+			if err := car.ScheduleSoftwareUpdate(ctx, time.Duration(offset)*time.Second); err != nil {
+				return fmt.Errorf("failed to schedule software update in %d s: %w", offset, err)
+			}
+			return nil
+		},
+	},
+	"cancel_software_update": {
+		execute: func(ctx context.Context, car vehicleCommander, _ commandArgs) error {
+			if err := car.CancelSoftwareUpdate(ctx); err != nil {
+				return fmt.Errorf("failed to cancel software update: %w", err)
+			}
+			return nil
+		},
+	},
+	"adjust_volume": {
+		validate: func(args commandArgs) error {
+			_, err := args.volumeArg()
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			volume, _ := args.volumeArg() // validated by run
+			if err := car.SetVolume(ctx, volume); err != nil {
+				return fmt.Errorf("failed to set volume to %g: %w", volume, err)
+			}
+			return nil
+		},
+	},
+	"media_toggle_playback": {
+		execute: func(ctx context.Context, car vehicleCommander, _ commandArgs) error {
+			if err := car.ToggleMediaPlayback(ctx); err != nil {
+				return fmt.Errorf("failed to toggle media playback (not retried, it is a toggle): %w", err)
+			}
+			return nil
+		},
+		// A toggle: a retry after a lost reply would undo it.
+		notRetried: func(commandArgs) bool { return true },
+	},
+	"add_precondition_schedule": {
+		validate: func(args commandArgs) error {
+			_, err := args.preconditionSchedule()
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			schedule, _ := args.preconditionSchedule() // validated by run
+			if schedule.GetId() == 0 {
+				// Invariant: handlers.Command always passes the body through PrepareCommandBody.
+				return errors.New("precondition schedule id was not prepared")
+			}
+			if err := car.AddPreconditionSchedule(ctx, schedule); err != nil {
+				return fmt.Errorf("failed to add precondition schedule %d: %w", schedule.GetId(), err)
+			}
+			return nil
+		},
+		prepare: preparePreconditionSchedule,
+	},
+	"remove_precondition_schedule": {
+		validate: func(args commandArgs) error {
+			_, err := args.scheduleIDArg("id")
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			id, _ := args.scheduleIDArg("id") // validated by run
+			if err := car.RemovePreconditionSchedule(ctx, id); err != nil {
+				return fmt.Errorf("failed to remove precondition schedule %d: %w", id, err)
+			}
+			return nil
+		},
+	},
+	"set_scheduled_departure": {
+		validate: func(args commandArgs) error {
+			_, err := args.scheduledDeparture()
+			return err
+		},
+		execute: func(ctx context.Context, car vehicleCommander, args commandArgs) error {
+			d, _ := args.scheduledDeparture() // validated by run
+			if !d.enable {
+				if err := car.ClearScheduledDeparture(ctx); err != nil {
+					return fmt.Errorf("failed to clear scheduled departure: %w", err)
+				}
+				return nil
+			}
+			if err := car.ScheduleDeparture(ctx, d.departAt, d.offPeakEnd, d.preconditioning, d.offPeak); err != nil {
+				return fmt.Errorf("failed to set scheduled departure: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // IsSupportedCommand reports whether name is accepted on the command route.
@@ -750,6 +896,22 @@ func (args commandArgs) optFloatArg(key string) (value float64, present bool, er
 	default:
 		return 0, true, invalidBodyf("%s must be a number or a numeric string", key)
 	}
+}
+
+// volumeArg reads the required adjust_volume volume: a JSON number or a decimal string
+// (optFloatArg), decimals allowed, within [minVolume, maxVolume]; the SDK refuses more than 10.
+func (args commandArgs) volumeArg() (float32, error) {
+	value, present, err := args.optFloatArg("volume")
+	if err != nil {
+		return 0, err
+	}
+	if !present {
+		return 0, invalidBodyf("volume missing")
+	}
+	if value < minVolume || value > maxVolume {
+		return 0, invalidBodyf("volume must be between %d and %d", minVolume, maxVolume)
+	}
+	return float32(value), nil
 }
 
 // cabinTemps reads driver_temp (required) and passenger_temp (optional, defaults to the driver

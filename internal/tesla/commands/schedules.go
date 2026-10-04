@@ -1,6 +1,6 @@
 // Charge schedule commands (UC1014): add_charge_schedule, remove_charge_schedule and
-// set_scheduled_charging; the body parsers live here, the registry entries in
-// fleetVehicleCommands.go.
+// set_scheduled_charging; UC1022 adds add_precondition_schedule and set_scheduled_departure.
+// The body parsers live here, the registry entries in fleetVehicleCommands.go.
 //
 // Derived from Lenart12/TeslaBleHttpProxy, internal/tesla/commands/fleetVehicleCommands.go
 // (commit 8bf65b8, author skrul, merged by c68b8ee), Copyright Lenart12 and contributors,
@@ -224,15 +224,71 @@ func (args commandArgs) chargeSchedule() (*vehicle.ChargeSchedule, error) {
 // returned as is. Called once per request by PrepareCommandBody, never by validate or execute,
 // so that every retry replays the same id.
 func prepareChargeSchedule(args commandArgs) commandArgs {
+	return withGeneratedScheduleID(args, "add_charge_schedule", "Generated charge schedule id")
+}
+
+// preparePreconditionSchedule is prepareChargeSchedule for add_precondition_schedule.
+func preparePreconditionSchedule(args commandArgs) commandArgs {
+	return withGeneratedScheduleID(args, "add_precondition_schedule", "Generated precondition schedule id")
+}
+
+// withGeneratedScheduleID returns a copy of args with a generated "id" when the body has none
+// (absent, null or 0), otherwise args itself. A body whose id is unreadable is returned as is:
+// validate refuses it.
+func withGeneratedScheduleID(args commandArgs, command, message string) commandArgs {
 	if id, _, err := args.optScheduleIDArg("id"); err != nil || id != 0 {
 		return args
 	}
 	id := scheduleIDs.next()
-	logging.Info("Generated charge schedule id", "Command", "add_charge_schedule", "Id", id)
+	logging.Info(message, "Command", command, "Id", id)
 	prepared := make(commandArgs, len(args)+1)
 	maps.Copy(prepared, args)
 	prepared["id"] = strconv.FormatUint(id, 10)
 	return prepared
+}
+
+// preconditionSchedule reads and validates the body of add_precondition_schedule: id (optional),
+// days_of_week, precondition_time (minutes after midnight), one_time (optional), enabled, lat and
+// lon (required). name is ignored. The Id is 0 while the body has none (see
+// preparePreconditionSchedule). It never modifies args and returns a new message.
+func (args commandArgs) preconditionSchedule() (*vehicle.PreconditionSchedule, error) {
+	id, _, err := args.optScheduleIDArg("id")
+	if err != nil {
+		return nil, err
+	}
+	days, err := args.daysOfWeekArg("days_of_week")
+	if err != nil {
+		return nil, err
+	}
+	minutes, err := args.intRangeArg("precondition_time", 0, maxMinuteOfDay)
+	if err != nil {
+		return nil, err
+	}
+	oneTime, err := args.optBoolArg("one_time")
+	if err != nil {
+		return nil, err
+	}
+	enabled, err := args.boolArg("enabled")
+	if err != nil {
+		return nil, err
+	}
+	lat, err := args.coordinateArg("lat", maxLatitude)
+	if err != nil {
+		return nil, err
+	}
+	lon, err := args.coordinateArg("lon", maxLongitude)
+	if err != nil {
+		return nil, err
+	}
+	return &vehicle.PreconditionSchedule{
+		Id:               id,
+		DaysOfWeek:       days,
+		PreconditionTime: int32(minutes),
+		OneTime:          oneTime,
+		Enabled:          enabled,
+		Latitude:         float32(lat),
+		Longitude:        float32(lon),
+	}, nil
 }
 
 // scheduledCharging reads the body of set_scheduled_charging: enable (required) and time in
@@ -250,6 +306,79 @@ func (args commandArgs) scheduledCharging() (enable bool, minutes int, err error
 		return false, 0, invalidBodyf("time missing")
 	}
 	return enable, minutes, nil
+}
+
+// departure is the validated body of set_scheduled_departure. With enable false only enable
+// is meaningful (ClearScheduledDeparture takes no argument).
+type departure struct {
+	enable                   bool
+	departAt, offPeakEnd     time.Duration
+	preconditioning, offPeak vehicle.ChargingPolicy
+}
+
+// scheduledDeparture reads the body of set_scheduled_departure. Types and ranges of every field
+// present are always checked, even when enable is false (the other fields are then ignored, as
+// set_scheduled_charging checks time). With enable true, departure_time is required, and
+// end_off_peak_time when off-peak charging is enabled; it is transmitted whenever present.
+func (args commandArgs) scheduledDeparture() (departure, error) {
+	enable, err := args.boolArg("enable")
+	if err != nil {
+		return departure{}, err
+	}
+	preEnabled, err := args.optBoolArg("preconditioning_enabled")
+	if err != nil {
+		return departure{}, err
+	}
+	preWeekdays, err := args.optBoolArg("preconditioning_weekdays_only")
+	if err != nil {
+		return departure{}, err
+	}
+	departMinutes, departPresent, err := args.optIntRangeArg("departure_time", 0, maxMinuteOfDay)
+	if err != nil {
+		return departure{}, err
+	}
+	offEnabled, err := args.optBoolArg("off_peak_charging_enabled")
+	if err != nil {
+		return departure{}, err
+	}
+	offWeekdays, err := args.optBoolArg("off_peak_charging_weekdays_only")
+	if err != nil {
+		return departure{}, err
+	}
+	offEndMinutes, offEndPresent, err := args.optIntRangeArg("end_off_peak_time", 0, maxMinuteOfDay)
+	if err != nil {
+		return departure{}, err
+	}
+	if !enable {
+		return departure{}, nil
+	}
+	if !departPresent {
+		return departure{}, invalidBodyf("departure_time missing")
+	}
+	if offEnabled && !offEndPresent {
+		return departure{}, invalidBodyf("end_off_peak_time missing")
+	}
+	return departure{
+		enable:          true,
+		departAt:        time.Duration(departMinutes) * time.Minute,
+		offPeakEnd:      time.Duration(offEndMinutes) * time.Minute,
+		preconditioning: departurePolicy(preEnabled, preWeekdays),
+		offPeak:         departurePolicy(offEnabled, offWeekdays),
+	}, nil
+}
+
+// departurePolicy maps a Fleet enabled / weekdays_only pair to the SDK policy. weekdaysOnly is
+// ignored when enabled is false: the client asked for "off". This differs on purpose from
+// pkg/proxy getPolicy of the official proxy, where weekdays_only alone means Weekdays.
+func departurePolicy(enabled, weekdaysOnly bool) vehicle.ChargingPolicy {
+	switch {
+	case !enabled:
+		return vehicle.ChargingPolicyOff
+	case weekdaysOnly:
+		return vehicle.ChargingPolicyWeekdays
+	default:
+		return vehicle.ChargingPolicyAllDays
+	}
 }
 
 // scheduleIDSource generates schedule ids: Unix seconds, the Fleet convention ("datetime in epoch
