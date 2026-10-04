@@ -167,6 +167,8 @@ curl -H "Authorization: Bearer $TOKEN" http://IP:8080/api/1/vehicles/VIN/vehicle
 curl -u any:$TOKEN "http://IP:8080/api/logs"
 ```
 
+Clients: the Jeedom plugin [Tesla BLE](https://jeedomdocs.decastro.fr/teslable/) sends the token (one global setting of the plugin, **Jeton d'API du proxy**, used for every proxy) as `Authorization: Bearer` on the API routes and as HTTP Basic on `/api/logs`; its **Tester** button tells whether the token is accepted. The evcc `tesla-ble` template cannot send it (see [Setup evcc](#setup-evcc)).
+
 Never put the token in a URL. The proxy speaks plain HTTP: use a reverse proxy with TLS if the network is not trusted.
 
 ## API
@@ -485,7 +487,7 @@ Due to BLE's power-saving design, Tesla vehicles may terminate connections after
 | Symptom | Cause | What to do |
 |---|---|---|
 | HTTP 503, `"reason":"invalid request body: ..."` | The body of a command is invalid (missing key, wrong type, value out of range). The command is refused **before** it is queued, with or without `wait`; the text after the colon names the key. | Fix the body as described in [Vehicle Commands](#vehicle-commands). Wimaha 2.3.0 reported such a body as a success. |
-| HTTP 401, `"reason":"unauthorized"`, `WWW-Authenticate` header | `apiToken` is set and the request carries no valid token. | Send `Authorization: Bearer <token>` (or HTTP Basic with the token as password for pages and `/api/logs`). A client that cannot send it (evcc `tesla-ble` template, the Jeedom plugin) stops working: unset `apiToken` and restart the proxy. |
+| HTTP 401, `"reason":"unauthorized"`, `WWW-Authenticate` header | `apiToken` is set and the request carries no valid token. | Send `Authorization: Bearer <token>` (or HTTP Basic with the token as password for pages and `/api/logs`). For the Jeedom plugin, enter the same value in its **Jeton d'API du proxy** setting and click **Tester**. A client that cannot send it (evcc `tesla-ble` template) stops working: unset `apiToken` and restart the proxy. |
 | The proxy stops at startup, the log says `Cannot start with this Bluetooth adapter` and `invalid btAdapter "..."` | `btAdapter` is not `hci0` to `hci15` (lower case, no leading zero). With `restart: always` the container restarts in a loop. | Fix or empty `btAdapter` (see [environment variables](docs/environment_variables.md#btadapter)), then recreate the container. |
 | The proxy stops at startup, the log says `Bluetooth adapter "hciN" (btAdapter) cannot be opened` | The adapter does not exist or cannot be opened. | Check the names with `btmgmt info` or `hciconfig -a`. If the message mentions `CAP_NET_ADMIN`, grant the capability (`cap_add: NET_ADMIN` with Docker, or the `setcap` command shown in the message). |
 | A command is refused by the vehicle (the reason mentions insufficient privileges) | The active key has the **Charging Manager** role, which does not authorize this command. | Generate and pair an **Owner** key in the dashboard. `key_role` of `/api/proxy/1/capabilities` shows the role of the active key. |
