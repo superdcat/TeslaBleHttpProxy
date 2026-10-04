@@ -24,7 +24,7 @@ This is the address and port to listen for HTTP requests. (Default: :8080)
 
 ## apiToken
 
-Optional API token (default: empty, no authentication). When set, `/api/1/...` and `/api/proxy/1/...` require `Authorization: Bearer <token>` (except `/api/proxy/1/version` and `/api/proxy/1/capabilities`), and the pages, `/api/logs*` and the key routes require HTTP Basic authentication with any user name and the token as password. A blank value leaves authentication disabled. Generate a token with `openssl rand -hex 32`. Never put it in a URL. The proxy has to be restarted to apply a change.
+Optional API token (default: empty, no authentication). When set, `/api/1/...` and `/api/proxy/1/...` require `Authorization: Bearer <token>` (except `/api/proxy/1/version` and `/api/proxy/1/capabilities`), and the pages, `/api/logs*` and the key routes require HTTP Basic authentication with any user name and the token as password. A blank value leaves authentication disabled. Generate a token with `openssl rand -hex 32`. Never put it in a URL. The proxy has to be restarted to apply a change. Setting it is recommended: without it, anyone who can reach the proxy can send commands and read the vehicle data, including the position (`location_data`); the proxy logs a reminder at startup when it is unset.
 
 # Example
 

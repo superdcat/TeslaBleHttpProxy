@@ -1,0 +1,25 @@
+# Input for the golden tests: carserver.VehicleData with location_state only, in protobuf text
+# format (UC1018). Every field read by LocationDataFromBle is set. The native, corrected and geo
+# coordinates carry other values: only the plain latitude and longitude may reach the JSON.
+location_state {
+  latitude: 48.85837
+  longitude: 2.294481
+  heading: 271
+  gps_as_of: 1767254390
+  native_location_supported: true
+  native_latitude: 48.8584
+  native_longitude: 2.2945
+  native_type { WGS {} }
+  corrected_latitude: 48.857
+  corrected_longitude: 2.293
+  timestamp { seconds: 1767254400 }
+  homelink_nearby: true
+  location_name: "Champ de Mars"
+  geo_latitude: 48.86
+  geo_longitude: 2.3
+  geo_heading: 270.5
+  geo_elevation: 35
+  geo_accuracy: 4.5
+  estimated_gps_valid: true
+  estimated_to_raw_distance: 12.5
+}

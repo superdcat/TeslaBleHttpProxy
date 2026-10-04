@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/wimaha/TeslaBleHttpProxy/internal/logging"
 )
 
 const testSecret = "uc1007-Zq8vR2xKt4Lp9WmN"
@@ -83,5 +85,53 @@ func TestCurrentAPIToken(t *testing.T) {
 	AppConfig = &Config{APIToken: NewAPIToken(testSecret)}
 	if !CurrentAPIToken().Matches(testSecret) {
 		t.Errorf("configured token not returned")
+	}
+}
+
+// UC1018 D-1018-02: an unset apiToken logs one recommendation (Info); a blank one keeps its
+// warning only; a token logs neither. The "Env: apiToken" line stays as before.
+func TestLoadConfigRecommendsAPIToken(t *testing.T) {
+	tests := []struct {
+		name            string
+		raw             string
+		wantEnv         string
+		wantRecommended int
+		wantWarnings    int
+	}{
+		{"unset", "", "unset", 1, 0},
+		{"blank", "   ", "unset", 0, 1},
+		{"token", testSecret, "set", 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("apiToken", tt.raw)
+			mark := len(logging.GetStorage().GetRecentEntries(logging.MaxLogEntries))
+			LoadConfig()
+			entries := logging.GetStorage().GetRecentEntries(logging.MaxLogEntries)[mark:]
+			recommended, warnings, env := 0, 0, 0
+			for _, e := range entries {
+				switch {
+				case e.Level == "info" && e.Message == apiTokenRecommendation:
+					recommended++
+				case e.Level == "warn" && e.Message == "apiToken is blank: authentication stays disabled":
+					warnings++
+				case e.Message == "Env:" && e.Fields["apiToken"] != nil:
+					env++
+					if e.Fields["apiToken"] != tt.wantEnv {
+						t.Errorf("Env apiToken = %v, want %s", e.Fields["apiToken"], tt.wantEnv)
+					}
+				}
+				if strings.Contains(e.Message, testSecret) {
+					t.Errorf("token logged: %q", e.Message)
+				}
+			}
+			if recommended != tt.wantRecommended || warnings != tt.wantWarnings || env != 1 {
+				t.Errorf("%d recommendations, %d warnings, %d Env lines; want %d, %d, 1",
+					recommended, warnings, env, tt.wantRecommended, tt.wantWarnings)
+			}
+		})
+	}
+	if !strings.Contains(apiTokenRecommendation, "location_data") {
+		t.Errorf("recommendation does not mention the location")
 	}
 }

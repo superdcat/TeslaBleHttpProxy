@@ -100,6 +100,9 @@ type Config struct {
 
 var AppConfig *Config
 
+// apiTokenRecommendation is logged at startup when apiToken is not set at all (UC1018).
+const apiTokenRecommendation = "apiToken is not set: anyone who can reach the proxy can send commands and read the vehicle data, location (location_data) included; setting apiToken is recommended unless a client cannot send it (evcc tesla-ble)"
+
 func LoadConfig() *Config {
 	envLogLevel := os.Getenv("logLevel")
 	if envLogLevel == "debug" {
@@ -152,7 +155,10 @@ func LoadConfig() *Config {
 	rawAPIToken := os.Getenv("apiToken")
 	apiToken := NewAPIToken(rawAPIToken)
 	logging.Info("Env:", "apiToken", apiToken.String())
-	if rawAPIToken != "" && !apiToken.Enabled() {
+	switch {
+	case rawAPIToken == "":
+		logging.Info(apiTokenRecommendation)
+	case !apiToken.Enabled():
 		logging.Warn("apiToken is blank: authentication stays disabled")
 	}
 

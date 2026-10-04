@@ -362,3 +362,41 @@ func TestEveryFleetCommandNeedsToken(t *testing.T) {
 		})
 	}
 }
+
+// UC1018 AC3: reading the position needs the token when one is configured. The protection comes
+// from the fail-closed default (a route absent from routeAccess needs the Bearer token), it is
+// not specific to location_data. The 200 of a full read is established by composition with the
+// handler tests (enqueueCommand is not reachable from this package) and checked on the vehicle.
+func TestLocationDataNeedsToken(t *testing.T) {
+	const target = "/api/1/vehicles/" + testVIN + "/vehicle_data?endpoints=location_data"
+	for template := range routeAccess {
+		if strings.Contains(template, "vehicle_data") {
+			t.Fatalf("routeAccess classifies %q: vehicle_data must stay on the Bearer default", template)
+		}
+	}
+	tc := routeCase{"GET", target, "", accessBearer, 503, notInitialized("vehicle_data"), ""}
+	unauthorized := `{"response":{"result":false,"reason":"unauthorized","vin":"","command":""}}` + "\n"
+
+	isolate(t)
+	useToken(t, testToken)
+	router := newServedRouter()
+	for name, authorization := range map[string]string{
+		"no header":    "",
+		"wrong bearer": "Bearer " + wrongSame,
+		"basic":        basic("anyone", testToken),
+	} {
+		rec := serve(router, tc, authorization)
+		if rec.Code != http.StatusUnauthorized || rec.Body.String() != unauthorized {
+			t.Errorf("%s: status %d body %q, want 401 unauthorized", name, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="TeslaBleHttpProxy"` {
+			t.Errorf("%s: WWW-Authenticate %q", name, got)
+		}
+	}
+	// A valid token reaches the handler (503 notInitialized: no BLE here), proof the middleware lets it pass.
+	assertAnswer(t, tc, serve(router, tc, "Bearer "+testToken))
+
+	// No token configured: served as before.
+	useToken(t, "")
+	assertAnswer(t, tc, serve(newServedRouter(), tc, ""))
+}

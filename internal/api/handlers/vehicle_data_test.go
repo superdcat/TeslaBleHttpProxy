@@ -12,14 +12,17 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
+	charmlog "github.com/charmbracelet/log"
 	"github.com/gorilla/mux"
 	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
 	"github.com/teslamotors/vehicle-command/pkg/vehicle"
 	"github.com/wimaha/TeslaBleHttpProxy/config"
 	"github.com/wimaha/TeslaBleHttpProxy/internal/api/models"
 	"github.com/wimaha/TeslaBleHttpProxy/internal/ble/control"
+	"github.com/wimaha/TeslaBleHttpProxy/internal/logging"
 	"github.com/wimaha/TeslaBleHttpProxy/internal/tesla/commands"
 	"google.golang.org/protobuf/proto"
 )
@@ -58,7 +61,7 @@ type queuedVehicleData struct {
 
 // vehicleDataQueue replaces the BLE queue: it notes each queued read and answers like the BLE loop,
 // from the wire fixtures of the models golden tests (drive_state.binpb for the drive category,
-// closures_state.binpb for the closures category, tire_pressure.binpb and software_update.binpb for theirs, vehicle_data.binpb for the others).
+// closures_state.binpb for the closures category, tire_pressure.binpb, software_update.binpb and location_data.binpb for theirs, vehicle_data.binpb for the others).
 func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
 	t.Helper()
 	queued := &[]queuedVehicleData{}
@@ -71,6 +74,7 @@ func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
 				vehicle.StateCategoryClosures:       "closures_state",
 				vehicle.StateCategoryTirePressure:   "tire_pressure",
 				vehicle.StateCategorySoftwareUpdate: "software_update",
+				vehicle.StateCategoryLocation:       "location_data",
 			}[category]
 			if !ok {
 				name = "vehicle_data"
@@ -237,6 +241,11 @@ func TestVehicleDataUnsupportedEndpoint(t *testing.T) {
 		{"software_update_state", "software_update_state"},
 		{"tire_pressure;", ""},
 		{"software_update;", ""},
+		{"location", "location"},
+		{"Location_Data", "Location_Data"},
+		{"location_state", "location_state"},
+		{"location-data", "location-data"},
+		{"location_data;", ""},
 		{"charge_state;nimportequoi", "nimportequoi"},
 		{"drive_state;", ""},
 		{"closures", "closures"},
@@ -400,5 +409,125 @@ func TestVehicleDataRawSemicolonServesDefault(t *testing.T) {
 	}
 	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "climate_state"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
 		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
+	}
+}
+
+// UC1018 AC2: location_data is served in the standard envelope, alone and combined (the
+// semicolon is encoded); the wake-up stays opt-in.
+func TestVehicleDataLocationData(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+	location := compactGolden(t, "location_data.golden.json")
+
+	rec := getVehicleData(t, "?endpoints=location_data")
+	want := vehicleDataBody(`{"location_data":` + location + `}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+	}
+	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"location_data"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
+	}
+
+	resetVehicleDataCache()
+	if rec := getVehicleData(t, "?endpoints=location_data&wakeup=true"); rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Fatalf("wakeup: got %d %s", rec.Code, rec.Body.String())
+	}
+	if last := (*queued)[len(*queued)-1]; !last.autoWakeup {
+		t.Errorf("last queued read %+v, want autoWakeup", last)
+	}
+
+	resetVehicleDataCache()
+	*queued = nil
+	rec = getVehicleData(t, "?endpoints="+url.QueryEscape("charge_state;location_data"))
+	want = vehicleDataBody(`{"charge_state":` + compactGolden(t, "charge_state.golden.json") + `,"location_data":` + location + `}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Errorf("combined: got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+	}
+	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "location_data"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
+	}
+}
+
+// useDebugLogOutput captures the console output of the logger at Debug level for one test.
+func useDebugLogOutput(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var out bytes.Buffer
+	previousLevel := charmlog.GetLevel()
+	charmlog.SetOutput(&out)
+	charmlog.SetLevel(charmlog.DebugLevel)
+	t.Cleanup(func() {
+		charmlog.SetOutput(os.Stderr)
+		charmlog.SetLevel(previousLevel)
+	})
+	return &out
+}
+
+// storedLogsSince returns the JSON of the stored log entries written after mark, as /api/logs
+// serves them (never fmt.Sprint of the fields: a []byte would print as numbers).
+func storedLogsSince(t *testing.T, mark int) string {
+	t.Helper()
+	b, err := json.Marshal(logging.GetStorage().GetRecentEntries(logging.MaxLogEntries)[mark:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func storedLogsMark(t *testing.T) int {
+	t.Helper()
+	n := len(logging.GetStorage().GetRecentEntries(logging.MaxLogEntries))
+	if n >= logging.MaxLogEntries-100 {
+		t.Fatalf("log store nearly full (%d entries): positions are not reliable", n)
+	}
+	return n
+}
+
+// UC1018 AC4: the position read by location_data is never logged: neither the console output nor
+// the stored entries served by /api/logs, whether the BLE fetch, the cache or the cache fallback
+// answers.
+func TestVehicleDataLocationNeverLogged(t *testing.T) {
+	forbidden := []string{"48.8583", "2.29448", "Champ de Mars", "latitude", "longitude"}
+	useVehicleDataCache(t, 30)
+	out := useDebugLogOutput(t)
+	queued := vehicleDataQueue(t)
+	mark := storedLogsMark(t)
+
+	// Cache miss: BLE fetch.
+	rec := getVehicleData(t, "?endpoints=location_data")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "48.85837") {
+		t.Fatalf("fetch: got %d %s", rec.Code, rec.Body.String())
+	}
+	// Valid cache.
+	rec = getVehicleData(t, "?endpoints=location_data")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "48.85837") || len(*queued) != 1 {
+		t.Fatalf("cache: got %d %s, %d reads", rec.Code, rec.Body.String(), len(*queued))
+	}
+	// Cache fallback: the BLE fetch of the missing endpoint fails, the cached position is served.
+	useQueue(t, func(_ context.Context, _ string, _ string, _ map[string]interface{}, response *models.ApiResponse, _ bool) error {
+		response.Error = "vehicle is sleeping"
+		response.Finish()
+		return nil
+	})
+	rec = getVehicleData(t, "?endpoints="+url.QueryEscape("location_data;charge_state"))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "48.85837") ||
+		!strings.Contains(rec.Body.String(), "partially processed from cache") {
+		t.Fatalf("fallback: got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// GetLogs encodes the stored entries as they are: the JSON of the entries written after mark is
+	// what /api/logs serves for them. GetLogs itself is not called here: an earlier test of the
+	// package stores a request body holding +Inf, which json cannot encode, so the whole store
+	// cannot be served in this process.
+	stored := storedLogsSince(t, mark)
+	// The scan bites: the logs of these requests are there.
+	if !strings.Contains(stored, "location_data") || !strings.Contains(out.String(), "location_data") {
+		t.Fatalf("the requests left no log to scan: stored %q, output %q", stored, out.String())
+	}
+	for name, text := range map[string]string{"storage": stored, "output": out.String()} {
+		for _, word := range forbidden {
+			if strings.Contains(text, word) {
+				t.Errorf("%s contains %q", name, word)
+			}
+		}
 	}
 }

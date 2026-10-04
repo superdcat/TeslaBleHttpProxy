@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
 	"github.com/teslamotors/vehicle-command/pkg/vehicle"
 	"github.com/wimaha/TeslaBleHttpProxy/internal/api/models"
+	"github.com/wimaha/TeslaBleHttpProxy/internal/logging"
 )
 
 func TestVehicleDataEndpointRegistry(t *testing.T) {
@@ -39,7 +41,7 @@ func TestVehicleDataEndpointRegistry(t *testing.T) {
 		t.Errorf("second call = %v, want %v", again, want)
 	}
 
-	for _, name := range []string{"drive", "Drive_State", "DRIVE_STATE", "closures", "Closures_State", "closure_state", "closures-state", "closures_state;", "", "charge-schedule", "tire-pressure", "software-update", "tire", "Tire_Pressure", "tire_pressure_state", "tire_pressure;", "Software_Update", "software_update_state", "nope"} {
+	for _, name := range []string{"drive", "Drive_State", "DRIVE_STATE", "closures", "Closures_State", "closure_state", "closures-state", "closures_state;", "", "charge-schedule", "tire-pressure", "software-update", "location", "Location_Data", "location_state", "location-data", "location_data;", "tire", "Tire_Pressure", "tire_pressure_state", "tire_pressure;", "Software_Update", "software_update_state", "nope"} {
 		if IsSupportedEndpoint(name) {
 			t.Errorf("IsSupportedEndpoint(%q) = true, want false", name)
 		}
@@ -54,6 +56,7 @@ func TestVehicleDataEndpointCategories(t *testing.T) {
 		"closures_state":  vehicle.StateCategoryClosures,
 		"tire_pressure":   vehicle.StateCategoryTirePressure,
 		"software_update": vehicle.StateCategorySoftwareUpdate,
+		"location_data":   vehicle.StateCategoryLocation,
 	}
 	if len(vehicleDataEndpoints) != len(want) {
 		t.Errorf("registry has %d endpoints, want %d", len(vehicleDataEndpoints), len(want))
@@ -84,7 +87,7 @@ func TestDefaultVehicleDataEndpoints(t *testing.T) {
 // The API only grows: removing one of these endpoints must be a deliberate change of this test.
 func TestVehicleDataEndpointNamesFloor(t *testing.T) {
 	names := VehicleDataEndpointNames()
-	for _, endpoint := range []string{"charge_state", "climate_state", "drive_state", "closures_state", "tire_pressure", "software_update"} {
+	for _, endpoint := range []string{"charge_state", "climate_state", "drive_state", "closures_state", "tire_pressure", "software_update", "location_data"} {
 		if !slices.Contains(names, endpoint) {
 			t.Errorf("endpoint %q is missing from VehicleDataEndpointNames()", endpoint)
 		}
@@ -134,4 +137,76 @@ func TestVehicleDataJSONErrors(t *testing.T) {
 			t.Errorf("got (%v, %v), %d reads", retry, err, calls)
 		}
 	})
+}
+
+// Values of the position used by the log tests, distinct from the other fixtures of the stores.
+var forbiddenPositionTexts = []string{"43.29651", "5.37016", "Vieux-Port Marseille", "latitude", "longitude"}
+
+// storedLogsSince returns the JSON of the log entries written after mark, as /api/logs serves them
+// (never fmt.Sprint of the fields: a []byte would print as numbers and hide a leak).
+func storedLogsSince(t *testing.T, mark int) string {
+	t.Helper()
+	entries := logging.GetStorage().GetRecentEntries(logging.MaxLogEntries)
+	if len(entries) >= logging.MaxLogEntries-100 {
+		t.Fatalf("log store nearly full (%d entries): positions are not reliable", len(entries))
+	}
+	b, err := json.Marshal(entries[mark:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func logMark(t *testing.T) int {
+	t.Helper()
+	return len(logging.GetStorage().GetRecentEntries(logging.MaxLogEntries))
+}
+
+// UC1018 AC4: the real converter chain (VehicleDataJSON with an injected read) never logs the
+// position it reads, on success and on a read error.
+func TestVehicleDataJSONLocationNeverLogged(t *testing.T) {
+	vd := &carserver.VehicleData{LocationState: &carserver.LocationState{
+		OptionalLatitude:     &carserver.LocationState_Latitude{Latitude: 43.29651},
+		OptionalLongitude:    &carserver.LocationState_Longitude{Longitude: 5.37016},
+		OptionalLocationName: &carserver.LocationState_LocationName{LocationName: "Vieux-Port Marseille"},
+	}}
+
+	// The scan bites: a position written to the store is found.
+	probeMark := logMark(t)
+	logging.Debug("probe", "Body", json.RawMessage(`{"latitude":43.29651}`))
+	if !strings.Contains(storedLogsSince(t, probeMark), "43.29651") {
+		t.Fatal("the log scan does not see a logged position")
+	}
+
+	mark := logMark(t)
+	got, retry, err := VehicleDataJSON(context.Background(), []string{"location_data"},
+		func(_ context.Context, c vehicle.StateCategory) (*carserver.VehicleData, error) {
+			if c != vehicle.StateCategoryLocation {
+				t.Errorf("category %v, want location", c)
+			}
+			return vd, nil
+		})
+	if err != nil || retry {
+		t.Fatalf("VehicleDataJSON() = (%v, %v)", retry, err)
+	}
+	if !strings.Contains(string(got), "43.29651") || !strings.Contains(string(got), "Vieux-Port Marseille") {
+		t.Errorf("result %s does not carry the position", got)
+	}
+	_, _, err = VehicleDataJSON(context.Background(), []string{"location_data"},
+		func(context.Context, vehicle.StateCategory) (*carserver.VehicleData, error) {
+			return vd, errors.New("vehicle is sleeping")
+		})
+	if err == nil || !strings.Contains(err.Error(), "vehicle is sleeping") {
+		t.Fatalf("read error = %v", err)
+	}
+
+	stored := storedLogsSince(t, mark)
+	for _, text := range forbiddenPositionTexts {
+		if strings.Contains(stored, text) {
+			t.Errorf("logs contain %q: %s", text, stored)
+		}
+	}
+	if strings.Contains(err.Error(), "43.29651") {
+		t.Errorf("error %q carries the position", err)
+	}
 }

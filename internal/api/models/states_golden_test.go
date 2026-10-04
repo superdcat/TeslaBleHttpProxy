@@ -134,3 +134,10 @@ func TestSoftwareUpdateMatchesGolden(t *testing.T) {
 	readWireInput(t, "software_update", &vd)
 	checkGolden(t, "software_update.golden.json", SoftwareUpdateFromBle(&vd))
 }
+
+// TestLocationDataMatchesGolden pins the wire encoding and the JSON of location_data (UC1018).
+func TestLocationDataMatchesGolden(t *testing.T) {
+	var vd carserver.VehicleData
+	readWireInput(t, "location_data", &vd)
+	checkGolden(t, "location_data.golden.json", LocationDataFromBle(&vd))
+}

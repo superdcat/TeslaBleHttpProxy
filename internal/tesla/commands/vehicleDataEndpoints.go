@@ -4,7 +4,9 @@
 // The closures_state name and category are those of categoriesByName of wimaha 2.3.0 (never
 // served); its typed model is written for the fork. The tire_pressure and software_update names
 // are those of Lenart12 94d1fd8 (wimaha 2.3.0 had tire-pressure and software-update, never
-// served); their typed models are written for the fork.
+// served); their typed models are written for the fork. The location_data name is that of the
+// Fleet API and of Lenart12 94d1fd8 (absent from wimaha 2.3.0); its typed model, a subset of
+// LocationState, is written for the fork.
 
 package commands
 
@@ -45,6 +47,9 @@ var vehicleDataEndpoints = map[string]vehicleDataEndpoint{
 	}},
 	"software_update": {vehicle.StateCategorySoftwareUpdate, func(d *carserver.VehicleData) any {
 		return models.SoftwareUpdateFromBle(d)
+	}},
+	"location_data": {vehicle.StateCategoryLocation, func(d *carserver.VehicleData) any {
+		return models.LocationDataFromBle(d)
 	}},
 }
 
