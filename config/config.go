@@ -106,7 +106,7 @@ type Config struct {
 var AppConfig *Config
 
 // apiTokenRecommendation is logged at startup when apiToken is not set at all (UC1018).
-const apiTokenRecommendation = "apiToken is not set: anyone who can reach the proxy can send commands and read the vehicle data, location (location_data) included; setting apiToken is recommended unless a client cannot send it (evcc tesla-ble)"
+const apiTokenRecommendation = "apiToken is not set: anyone who can reach the proxy can send commands and read the vehicle data, location (location_data) and charging and preconditioning schedules (charge_schedule_data, preconditioning_schedule_data) included; setting apiToken is recommended unless a client cannot send it (evcc tesla-ble)"
 
 // maxLoggedEnvValue bounds the characters of an environment value written to the logs.
 const maxLoggedEnvValue = 64

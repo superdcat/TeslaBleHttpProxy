@@ -63,10 +63,10 @@ Please remember to create an empty folder where the keys can be stored later. In
 Pull and start TeslaBleHttpProxy with `docker compose up -d`.
 
 **Migrating from the wimaha image:** only change the `image:` line, then run `docker compose pull && docker compose up -d`.
-The `key` folder is kept: no new pairing is needed. To go back, restore the previous `image:` line.
+The `key` folder is kept: no new pairing is needed. Nothing changes for evcc or the Jeedom plugin: same URL and port, same routes, same response envelope, and `vehicle_data` still serves `charge_state` and `climate_state` by default (the other endpoints are only served when requested). To go back, restore the previous `image:` line.
 
 **Updates:** restarting the Pi does **not** update the image. Run `docker compose pull && docker compose up -d` (with a
-pinned tag, change the tag first). Release notes: [Releases](https://github.com/superdcat/TeslaBleHttpProxy/releases).
+pinned tag, change the tag first). Release notes: [Releases](https://github.com/superdcat/TeslaBleHttpProxy/releases). Restarting the container (`docker compose restart`, `restart: always` after a reboot) keeps the image it already has: only `docker compose pull` fetches a newer one.
 
 Note that you can optionally set environment variables to override the default behavior. See [environment variables](docs/environment_variables.md) for more information.
 
@@ -74,7 +74,7 @@ Note that you can optionally set environment variables to override the default b
 
 ### Build yourself
 
-Download the code and save it in a folder named 'TeslaBleHttpProxy'. From there, you can easily compile the program.
+You need Go 1.26 or newer (the `go` line of `go.mod`); the Docker image is built with `golang:1.27.1` (see the `Dockerfile`). Download the code and save it in a folder named 'TeslaBleHttpProxy'. From there, you can easily compile the program.
 
 ```
 go build .
@@ -151,7 +151,7 @@ With the optional `apiToken` (see [Authentication](#authentication-optional-supe
 
 ## Authentication (optional, superdcat fork)
 
-By default the proxy has no authentication: anyone who can reach its port can send commands to the vehicle. Set the environment variable `apiToken` to protect it (generate a token with `openssl rand -hex 32`; see [environment variables](docs/environment_variables.md#apitoken)). Setting it is recommended, especially with `location_data`, which serves the position of the vehicle; without a token `/api/logs` is open too and shows the coordinates sent in command bodies. When it is empty or unset, nothing else changes. A change needs a restart.
+By default the proxy has no authentication: anyone who can reach its port can send commands to the vehicle. Set the environment variable `apiToken` to protect it (generate a token with `openssl rand -hex 32`; see [environment variables](docs/environment_variables.md#apitoken)). Setting it is recommended, especially with `location_data`, which serves the position of the vehicle, and with `charge_schedule_data` and `preconditioning_schedule_data`, which serve the location of each schedule; without a token `/api/logs` is open too and shows the coordinates sent in command bodies. When it is empty or unset, nothing else changes. A change needs a restart.
 
 With a token set:
 
@@ -348,6 +348,24 @@ By default you will receive the following data:
 - charge_state
 - climate_state
 
+#### Summary of the endpoints
+
+The endpoints accepted by `vehicle_data` (names are case-sensitive; the live list is `vehicle_data_endpoints` of `/api/proxy/1/capabilities`):
+
+| Endpoint | Content | Units | In the default response | Personal data |
+|---|---|---|---|---|
+| `charge_state` | Charge level, limit, power, current, voltage, time to full, charge port | Ranges (`battery_range`, `ideal_battery_range`, `est_battery_range`, `charge_miles_added_*`) in miles, as sent by the vehicle | yes | no |
+| `climate_state` | Cabin and outside temperatures, setpoints, climate on/off, seat and steering wheel heating, overheat protection | Degrees Celsius | yes | no |
+| `drive_state` | Shift state, speed, power, odometer | `odometer` in miles; `speed` as sent by the vehicle (mph) | no | no |
+| `closures_state` | Doors, trunks, windows, sunroof, lock, user presence, sentry mode | Booleans and enums | no | no |
+| `tire_pressure` | Four tire pressures, warnings, recommended cold pressures | Bar (no conversion); times in Unix seconds | no | no |
+| `software_update` | Status, scheduled time, download and install progress, version | Times of the schedule in milliseconds; durations in seconds | no | no |
+| `location_data` | Latitude, longitude, heading, place name | Degrees (WGS-84) | no | **yes** (position) |
+| `charge_schedule_data` | Charge schedules (with their `id`), window, buffer | Minutes after midnight; days as a bitmask | no | **yes** (location of each schedule) |
+| `preconditioning_schedule_data` | Preconditioning schedules (with their `id`) | Minutes after midnight; days as a bitmask | no | **yes** (location of each schedule) |
+
+Set an `apiToken` when you use the endpoints flagged as personal data (see [Authentication](#authentication-optional-superdcat-fork)). `body_controller_state` is a separate route (see [Body Controller State](#body-controller-state)).
+
 If you want to receive specific data, you can add the endpoints to the request. This also lets you request additional endpoints that are not part of the default response, such as `drive_state` (which includes the `odometer` field in miles, delivered over BLE in the drive state). For example:
 
 `http://localhost:8080/api/1/vehicles/{VIN}/vehicle_data?endpoints=charge_state`
@@ -461,6 +479,16 @@ TeslaBleHttpProxy requires your Tesla vehicle to support **Phone Key** functiona
 ### Connection Timeouts
 
 Due to BLE's power-saving design, Tesla vehicles may terminate connections after ~30 seconds, causing "connection timeout" logs. This is normal, and the proxy reconnects automatically, ensuring EVCC or other integrations work without issues. Keep the proxy device within ~5-10 meters of the vehicle for reliable connections.
+
+### Errors specific to the superdcat fork
+
+| Symptom | Cause | What to do |
+|---|---|---|
+| HTTP 503, `"reason":"invalid request body: ..."` | The body of a command is invalid (missing key, wrong type, value out of range). The command is refused **before** it is queued, with or without `wait`; the text after the colon names the key. | Fix the body as described in [Vehicle Commands](#vehicle-commands). Wimaha 2.3.0 reported such a body as a success. |
+| HTTP 401, `"reason":"unauthorized"`, `WWW-Authenticate` header | `apiToken` is set and the request carries no valid token. | Send `Authorization: Bearer <token>` (or HTTP Basic with the token as password for pages and `/api/logs`). A client that cannot send it (evcc `tesla-ble` template, the Jeedom plugin) stops working: unset `apiToken` and restart the proxy. |
+| The proxy stops at startup, the log says `Cannot start with this Bluetooth adapter` and `invalid btAdapter "..."` | `btAdapter` is not `hci0` to `hci15` (lower case, no leading zero). With `restart: always` the container restarts in a loop. | Fix or empty `btAdapter` (see [environment variables](docs/environment_variables.md#btadapter)), then recreate the container. |
+| The proxy stops at startup, the log says `Bluetooth adapter "hciN" (btAdapter) cannot be opened` | The adapter does not exist or cannot be opened. | Check the names with `btmgmt info` or `hciconfig -a`. If the message mentions `CAP_NET_ADMIN`, grant the capability (`cap_add: NET_ADMIN` with Docker, or the `setcap` command shown in the message). |
+| A command is refused by the vehicle (the reason mentions insufficient privileges) | The active key has the **Charging Manager** role, which does not authorize this command. | Generate and pair an **Owner** key in the dashboard. `key_role` of `/api/proxy/1/capabilities` shows the role of the active key. |
 
 ### BLE Device Limit (Maximum 3 Devices)
 

@@ -131,7 +131,9 @@ func TestLoadConfigRecommendsAPIToken(t *testing.T) {
 			}
 		})
 	}
-	if !strings.Contains(apiTokenRecommendation, "location_data") {
-		t.Errorf("recommendation does not mention the location")
+	for _, name := range []string{"location_data", "charge_schedule_data", "preconditioning_schedule_data"} {
+		if !strings.Contains(apiTokenRecommendation, name) {
+			t.Errorf("recommendation does not mention %s", name)
+		}
 	}
 }
