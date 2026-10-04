@@ -1,0 +1,13 @@
+# Input for the golden tests: carserver.VehicleData with software_update_state only, in protobuf text
+# format (UC1017). Every field read by SoftwareUpdateFromBle is set: oneof members have explicit
+# presence, so the .binpb carries every field number.
+software_update_state {
+  status { Scheduled {} }
+  scheduled_time_ms: 1767258000000
+  warning_time_remaining_ms: 600000
+  expected_duration_sec: 1500
+  download_perc: 100
+  install_perc: 7
+  version: "2026.32.5"
+  timestamp { seconds: 1767254400 }
+}

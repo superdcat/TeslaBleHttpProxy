@@ -1,0 +1,10 @@
+{
+  "timestamp": 1767254400,
+  "status": "Scheduled",
+  "scheduled_time_ms": 1767258000000,
+  "warning_time_remaining_ms": 600000,
+  "expected_duration_sec": 1500,
+  "download_perc": 100,
+  "install_perc": 7,
+  "version": "2026.32.5"
+}

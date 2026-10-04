@@ -120,3 +120,17 @@ func TestClosuresStateMatchesGolden(t *testing.T) {
 	readWireInput(t, "closures_state", &vd)
 	checkGolden(t, "closures_state.golden.json", ClosuresStateFromBle(&vd))
 }
+
+// TestTirePressureMatchesGolden pins the wire encoding and the JSON of tire_pressure (UC1017).
+func TestTirePressureMatchesGolden(t *testing.T) {
+	var vd carserver.VehicleData
+	readWireInput(t, "tire_pressure", &vd)
+	checkGolden(t, "tire_pressure.golden.json", TirePressureFromBle(&vd))
+}
+
+// TestSoftwareUpdateMatchesGolden pins the wire encoding and the JSON of software_update (UC1017).
+func TestSoftwareUpdateMatchesGolden(t *testing.T) {
+	var vd carserver.VehicleData
+	readWireInput(t, "software_update", &vd)
+	checkGolden(t, "software_update.golden.json", SoftwareUpdateFromBle(&vd))
+}

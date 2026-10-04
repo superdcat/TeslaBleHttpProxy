@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -57,7 +58,7 @@ type queuedVehicleData struct {
 
 // vehicleDataQueue replaces the BLE queue: it notes each queued read and answers like the BLE loop,
 // from the wire fixtures of the models golden tests (drive_state.binpb for the drive category,
-// closures_state.binpb for the closures category, vehicle_data.binpb for the others).
+// closures_state.binpb for the closures category, tire_pressure.binpb and software_update.binpb for theirs, vehicle_data.binpb for the others).
 func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
 	t.Helper()
 	queued := &[]queuedVehicleData{}
@@ -66,8 +67,10 @@ func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
 		*queued = append(*queued, queuedVehicleData{command, endpoints, autoWakeup})
 		read := func(_ context.Context, category vehicle.StateCategory) (*carserver.VehicleData, error) {
 			name, ok := map[vehicle.StateCategory]string{
-				vehicle.StateCategoryDrive:    "drive_state",
-				vehicle.StateCategoryClosures: "closures_state",
+				vehicle.StateCategoryDrive:          "drive_state",
+				vehicle.StateCategoryClosures:       "closures_state",
+				vehicle.StateCategoryTirePressure:   "tire_pressure",
+				vehicle.StateCategorySoftwareUpdate: "software_update",
 			}[category]
 			if !ok {
 				name = "vehicle_data"
@@ -226,6 +229,14 @@ func TestVehicleDataUnsupportedEndpoint(t *testing.T) {
 		{"DRIVE_STATE", "DRIVE_STATE"},
 		{"charge-schedule", "charge-schedule"},
 		{"tire-pressure", "tire-pressure"},
+		{"software-update", "software-update"},
+		{"tire", "tire"},
+		{"Tire_Pressure", "Tire_Pressure"},
+		{"tire_pressure_state", "tire_pressure_state"},
+		{"Software_Update", "Software_Update"},
+		{"software_update_state", "software_update_state"},
+		{"tire_pressure;", ""},
+		{"software_update;", ""},
 		{"charge_state;nimportequoi", "nimportequoi"},
 		{"drive_state;", ""},
 		{"closures", "closures"},
@@ -300,5 +311,94 @@ func TestVehicleDataDriveStateCacheAndWakeup(t *testing.T) {
 	}
 	if last := (*queued)[len(*queued)-1]; !last.autoWakeup {
 		t.Errorf("last queued read %+v, want autoWakeup", last)
+	}
+}
+
+// UC1017 AC3: tire_pressure and software_update are served in the standard envelope, alone and
+// combined (the semicolon is encoded: see TestVehicleDataRawSemicolonServesDefault); the wake-up
+// stays opt-in.
+func TestVehicleDataTirePressureSoftwareUpdate(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+	tires := compactGolden(t, "tire_pressure.golden.json")
+	update := compactGolden(t, "software_update.golden.json")
+
+	for _, tc := range []struct {
+		name, query, body string
+		endpoints         []string
+	}{
+		{"tire_pressure", "tire_pressure", `{"tire_pressure":` + tires + `}`, []string{"tire_pressure"}},
+		{"software_update", "software_update", `{"software_update":` + update + `}`, []string{"software_update"}},
+		{"both", url.QueryEscape("tire_pressure;software_update"), `{"software_update":` + update + `,"tire_pressure":` + tires + `}`,
+			[]string{"tire_pressure", "software_update"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetVehicleDataCache()
+			*queued = nil
+			rec := getVehicleData(t, "?endpoints="+tc.query)
+			if want := vehicleDataBody(tc.body); rec.Code != http.StatusOK || rec.Body.String() != want {
+				t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+			}
+			if wantQueued := []queuedVehicleData{{"vehicle_data", tc.endpoints, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+				t.Errorf("queued %+v, want %+v", *queued, wantQueued)
+			}
+		})
+	}
+
+	resetVehicleDataCache()
+	if rec := getVehicleData(t, "?endpoints=tire_pressure&wakeup=true"); rec.Code != http.StatusOK {
+		t.Fatalf("wakeup: got %d %s", rec.Code, rec.Body.String())
+	}
+	if last := (*queued)[len(*queued)-1]; !last.autoWakeup {
+		t.Errorf("last queued read %+v, want autoWakeup", last)
+	}
+}
+
+// A category the vehicle refuses fails the whole request, like any other read failure.
+func TestVehicleDataTirePressureRefused(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	useQueue(t, func(ctx context.Context, command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) error {
+		endpoints, ok := body["endpoints"].([]string)
+		if !ok {
+			t.Errorf("body[endpoints] is %T, want []string", body["endpoints"])
+		} else if want := []string{"tire_pressure", "software_update"}; !reflect.DeepEqual(endpoints, want) {
+			t.Errorf("endpoints %v, want %v", endpoints, want)
+		}
+		_, _, err := commands.VehicleDataJSON(ctx, endpoints, func(context.Context, vehicle.StateCategory) (*carserver.VehicleData, error) {
+			return nil, errors.New("category not supported")
+		})
+		if err == nil {
+			t.Error("VehicleDataJSON returned no error")
+			err = errors.New("no error")
+		}
+		response.Error = err.Error()
+		response.Finish()
+		return nil
+	})
+
+	rec := getVehicleData(t, "?endpoints="+url.QueryEscape("tire_pressure;software_update"))
+
+	want := envelope(false, "Failed to get vehicle data: category not supported", "vehicle_data")
+	if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != want {
+		t.Errorf("got %d %s\nwant 503 %s", rec.Code, rec.Body.String(), want)
+	}
+}
+
+// Known limitation inherited from 2.3.0; invert when the parsing is fixed. Since Go 1.17 a raw
+// semicolon makes url.ParseQuery drop the whole parameter, so the default endpoints are served
+// without any error: clients must encode it as %3B (UC1017 D-1017-04).
+func TestVehicleDataRawSemicolonServesDefault(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+
+	rec := getVehicleData(t, "?endpoints=tire_pressure;software_update")
+
+	want := vehicleDataBody(`{"charge_state":` + compactGolden(t, "charge_state.golden.json") +
+		`,"climate_state":` + compactGolden(t, "climate_state.golden.json") + `}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+	}
+	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "climate_state"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
 	}
 }

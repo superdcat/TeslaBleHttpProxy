@@ -2,7 +2,9 @@
 // ExceptedEndpoints list and the categoriesByName map of wimaha 2.3.0 (whose hyphenated names
 // were never served over HTTP). The drive_state endpoint comes from wimaha PR #160 (Optic00).
 // The closures_state name and category are those of categoriesByName of wimaha 2.3.0 (never
-// served); its typed model is written for the fork.
+// served); its typed model is written for the fork. The tire_pressure and software_update names
+// are those of Lenart12 94d1fd8 (wimaha 2.3.0 had tire-pressure and software-update, never
+// served); their typed models are written for the fork.
 
 package commands
 
@@ -37,6 +39,12 @@ var vehicleDataEndpoints = map[string]vehicleDataEndpoint{
 	}},
 	"closures_state": {vehicle.StateCategoryClosures, func(d *carserver.VehicleData) any {
 		return models.ClosuresStateFromBle(d)
+	}},
+	"tire_pressure": {vehicle.StateCategoryTirePressure, func(d *carserver.VehicleData) any {
+		return models.TirePressureFromBle(d)
+	}},
+	"software_update": {vehicle.StateCategorySoftwareUpdate, func(d *carserver.VehicleData) any {
+		return models.SoftwareUpdateFromBle(d)
 	}},
 }
 

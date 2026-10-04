@@ -1,0 +1,21 @@
+{
+  "timestamp": 1767254400,
+  "tpms_pressure_fl": 2.9,
+  "tpms_pressure_fr": 2.925,
+  "tpms_pressure_rl": 2.1,
+  "tpms_pressure_rr": 1.5,
+  "tpms_last_seen_pressure_time_fl": 1767254100,
+  "tpms_last_seen_pressure_time_fr": 1767254160,
+  "tpms_last_seen_pressure_time_rl": 1767254220,
+  "tpms_last_seen_pressure_time_rr": 1767254280,
+  "tpms_hard_warning_fl": false,
+  "tpms_hard_warning_fr": false,
+  "tpms_hard_warning_rl": false,
+  "tpms_hard_warning_rr": true,
+  "tpms_soft_warning_fl": false,
+  "tpms_soft_warning_fr": false,
+  "tpms_soft_warning_rl": true,
+  "tpms_soft_warning_rr": false,
+  "tpms_rcp_front_value": 2.95,
+  "tpms_rcp_rear_value": 3.1
+}
