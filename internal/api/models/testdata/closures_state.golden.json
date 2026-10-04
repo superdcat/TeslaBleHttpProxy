@@ -1,0 +1,23 @@
+{
+  "timestamp": 1767254400,
+  "door_open_driver_front": false,
+  "door_open_driver_rear": false,
+  "door_open_passenger_front": true,
+  "door_open_passenger_rear": false,
+  "door_open_trunk_front": false,
+  "door_open_trunk_rear": true,
+  "window_open_driver_front": true,
+  "window_open_passenger_front": false,
+  "window_open_driver_rear": false,
+  "window_open_passenger_rear": true,
+  "sun_roof_state": "Vent",
+  "sun_roof_percent_open": 15,
+  "locked": true,
+  "is_user_present": false,
+  "valet_mode": false,
+  "sentry_mode_state": "Armed",
+  "sentry_mode": true,
+  "tonneau_state": "CLOSURESTATE_AJAR",
+  "tonneau_percent_open": 40,
+  "tonneau_in_motion": false
+}

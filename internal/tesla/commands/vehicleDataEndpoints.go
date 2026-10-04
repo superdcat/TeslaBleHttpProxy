@@ -1,6 +1,8 @@
 // Registry of the vehicle_data endpoints, written for the superdcat fork. It replaces the
 // ExceptedEndpoints list and the categoriesByName map of wimaha 2.3.0 (whose hyphenated names
 // were never served over HTTP). The drive_state endpoint comes from wimaha PR #160 (Optic00).
+// The closures_state name and category are those of categoriesByName of wimaha 2.3.0 (never
+// served); its typed model is written for the fork.
 
 package commands
 
@@ -32,6 +34,9 @@ var vehicleDataEndpoints = map[string]vehicleDataEndpoint{
 	}},
 	"drive_state": {vehicle.StateCategoryDrive, func(d *carserver.VehicleData) any {
 		return models.DriveStateFromBle(d)
+	}},
+	"closures_state": {vehicle.StateCategoryClosures, func(d *carserver.VehicleData) any {
+		return models.ClosuresStateFromBle(d)
 	}},
 }
 

@@ -57,7 +57,7 @@ type queuedVehicleData struct {
 
 // vehicleDataQueue replaces the BLE queue: it notes each queued read and answers like the BLE loop,
 // from the wire fixtures of the models golden tests (drive_state.binpb for the drive category,
-// vehicle_data.binpb for the others).
+// closures_state.binpb for the closures category, vehicle_data.binpb for the others).
 func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
 	t.Helper()
 	queued := &[]queuedVehicleData{}
@@ -65,9 +65,12 @@ func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
 		endpoints, _ := body["endpoints"].([]string)
 		*queued = append(*queued, queuedVehicleData{command, endpoints, autoWakeup})
 		read := func(_ context.Context, category vehicle.StateCategory) (*carserver.VehicleData, error) {
-			name := "vehicle_data"
-			if category == vehicle.StateCategoryDrive {
-				name = "drive_state"
+			name, ok := map[vehicle.StateCategory]string{
+				vehicle.StateCategoryDrive:    "drive_state",
+				vehicle.StateCategoryClosures: "closures_state",
+			}[category]
+			if !ok {
+				name = "vehicle_data"
 			}
 			b, err := os.ReadFile(filepath.Join("..", "models", "testdata", name+".binpb"))
 			if err != nil {
@@ -130,8 +133,49 @@ func TestVehicleDataDriveState(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
 	}
-	if want := []queuedVehicleData{{"vehicle_data", []string{"drive_state"}, false}}; !reflect.DeepEqual(*queued, want) {
-		t.Errorf("queued %+v, want %+v", *queued, want)
+	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"drive_state"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
+	}
+}
+
+// UC1016 AC4: closures_state is served in the standard envelope, alone and combined; the wake-up
+// stays opt-in.
+func TestVehicleDataClosuresState(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+	closures := compactGolden(t, "closures_state.golden.json")
+
+	rec := getVehicleData(t, "?endpoints=closures_state")
+	want := vehicleDataBody(`{"closures_state":` + closures + `}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+	}
+	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"closures_state"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
+	}
+
+	resetVehicleDataCache()
+	if rec := getVehicleData(t, "?endpoints=closures_state&wakeup=true"); rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Fatalf("wakeup: got %d %s", rec.Code, rec.Body.String())
+	}
+	if last := (*queued)[len(*queued)-1]; !last.autoWakeup {
+		t.Errorf("last queued read %+v, want autoWakeup", last)
+	}
+}
+
+func TestVehicleDataClosuresStateWithCharge(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+
+	rec := getVehicleData(t, "?endpoints="+url.QueryEscape("charge_state;closures_state"))
+
+	want := vehicleDataBody(`{"charge_state":` + compactGolden(t, "charge_state.golden.json") +
+		`,"closures_state":` + compactGolden(t, "closures_state.golden.json") + `}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != want {
+		t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
+	}
+	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "closures_state"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
 	}
 }
 
@@ -149,8 +193,8 @@ func TestVehicleDataDefaultMatches230(t *testing.T) {
 			if rec.Code != http.StatusOK || rec.Body.String() != want {
 				t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
 			}
-			if want := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "climate_state"}, false}}; !reflect.DeepEqual(*queued, want) {
-				t.Errorf("queued %+v, want %+v", *queued, want)
+			if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "climate_state"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+				t.Errorf("queued %+v, want %+v", *queued, wantQueued)
 			}
 		})
 	}
@@ -167,8 +211,8 @@ func TestVehicleDataCombinedEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Errorf("got %d %s\nwant 200 %s", rec.Code, rec.Body.String(), want)
 	}
-	if want := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "drive_state"}, false}}; !reflect.DeepEqual(*queued, want) {
-		t.Errorf("queued %+v, want %+v", *queued, want)
+	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "drive_state"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
 	}
 }
 
@@ -184,6 +228,11 @@ func TestVehicleDataUnsupportedEndpoint(t *testing.T) {
 		{"tire-pressure", "tire-pressure"},
 		{"charge_state;nimportequoi", "nimportequoi"},
 		{"drive_state;", ""},
+		{"closures", "closures"},
+		{"Closures_State", "Closures_State"},
+		{"closure_state", "closure_state"},
+		{"closures-state", "closures-state"},
+		{"closures_state;", ""},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			useVehicleDataCache(t, 30)

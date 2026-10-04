@@ -113,3 +113,10 @@ func TestDriveStateMatchesGolden(t *testing.T) {
 	readWireInput(t, "drive_state", &vd)
 	checkGolden(t, "drive_state.golden.json", DriveStateFromBle(&vd))
 }
+
+// TestClosuresStateMatchesGolden pins the wire encoding and the JSON of closures_state (UC1016).
+func TestClosuresStateMatchesGolden(t *testing.T) {
+	var vd carserver.VehicleData
+	readWireInput(t, "closures_state", &vd)
+	checkGolden(t, "closures_state.golden.json", ClosuresStateFromBle(&vd))
+}

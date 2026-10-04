@@ -1,0 +1,25 @@
+# Input for the golden tests: carserver.VehicleData with closures_state only, in protobuf text format
+# (UC1016). Every field read by ClosuresStateFromBle is set, false included: oneof members have explicit
+# presence, so false and 0 are on the wire and the .binpb carries every field number.
+closures_state {
+  door_open_driver_front: false
+  door_open_driver_rear: false
+  door_open_passenger_front: true
+  door_open_passenger_rear: false
+  door_open_trunk_front: false
+  door_open_trunk_rear: true
+  window_open_driver_front: true
+  window_open_passenger_front: false
+  window_open_driver_rear: false
+  window_open_passenger_rear: true
+  sun_roof_state { Vent {} }
+  sun_roof_percent_open: 15
+  locked: true
+  is_user_present: false
+  valet_mode: false
+  sentry_mode_state { Armed {} }
+  tonneau_state: CLOSURESTATE_AJAR
+  tonneau_percent_open: 40
+  tonneau_in_motion: false
+  timestamp { seconds: 1767254400 }
+}
