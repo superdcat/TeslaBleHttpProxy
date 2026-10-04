@@ -1,0 +1,37 @@
+{
+  "timestamp": 1767254400,
+  "precondition_schedules": [
+    {
+      "id": 1767225700,
+      "name": "Home",
+      "days_of_week": 62,
+      "precondition_time": 450,
+      "one_time": false,
+      "enabled": true,
+      "latitude": 45.764,
+      "longitude": 4.8357
+    },
+    {
+      "id": 1767225701,
+      "name": "",
+      "days_of_week": 1,
+      "precondition_time": 600,
+      "one_time": true,
+      "enabled": false,
+      "latitude": 44.8378,
+      "longitude": -0.5792
+    }
+  ],
+  "preconditioning_schedule_window": {
+    "id": 1767225702,
+    "name": "",
+    "days_of_week": 2,
+    "precondition_time": 480,
+    "one_time": false,
+    "enabled": true,
+    "latitude": 0,
+    "longitude": 0
+  },
+  "max_num_precondition_schedules": 10,
+  "next_schedule": true
+}

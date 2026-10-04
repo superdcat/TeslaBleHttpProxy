@@ -41,7 +41,7 @@ func TestVehicleDataEndpointRegistry(t *testing.T) {
 		t.Errorf("second call = %v, want %v", again, want)
 	}
 
-	for _, name := range []string{"drive", "Drive_State", "DRIVE_STATE", "closures", "Closures_State", "closure_state", "closures-state", "closures_state;", "", "charge-schedule", "tire-pressure", "software-update", "location", "Location_Data", "location_state", "location-data", "location_data;", "tire", "Tire_Pressure", "tire_pressure_state", "tire_pressure;", "Software_Update", "software_update_state", "nope"} {
+	for _, name := range []string{"drive", "Drive_State", "DRIVE_STATE", "closures", "Closures_State", "closure_state", "closures-state", "closures_state;", "", "charge-schedule", "tire-pressure", "software-update", "location", "Location_Data", "location_state", "location-data", "location_data;", "charge_schedule", "Charge_Schedule_Data", "charge_schedule_state", "charge-schedule-data", "charge_schedule_data;", "precondition-schedule", "preconditioning_schedule", "precondition_schedule_data", "Preconditioning_Schedule_Data", "preconditioning_schedule_state", "preconditioning_schedule_data;", "tire", "Tire_Pressure", "tire_pressure_state", "tire_pressure;", "Software_Update", "software_update_state", "nope"} {
 		if IsSupportedEndpoint(name) {
 			t.Errorf("IsSupportedEndpoint(%q) = true, want false", name)
 		}
@@ -50,13 +50,15 @@ func TestVehicleDataEndpointRegistry(t *testing.T) {
 
 func TestVehicleDataEndpointCategories(t *testing.T) {
 	want := map[string]vehicle.StateCategory{
-		"charge_state":    vehicle.StateCategoryCharge,
-		"climate_state":   vehicle.StateCategoryClimate,
-		"drive_state":     vehicle.StateCategoryDrive,
-		"closures_state":  vehicle.StateCategoryClosures,
-		"tire_pressure":   vehicle.StateCategoryTirePressure,
-		"software_update": vehicle.StateCategorySoftwareUpdate,
-		"location_data":   vehicle.StateCategoryLocation,
+		"charge_state":                  vehicle.StateCategoryCharge,
+		"climate_state":                 vehicle.StateCategoryClimate,
+		"drive_state":                   vehicle.StateCategoryDrive,
+		"closures_state":                vehicle.StateCategoryClosures,
+		"tire_pressure":                 vehicle.StateCategoryTirePressure,
+		"software_update":               vehicle.StateCategorySoftwareUpdate,
+		"location_data":                 vehicle.StateCategoryLocation,
+		"charge_schedule_data":          vehicle.StateCategoryChargeSchedule,
+		"preconditioning_schedule_data": vehicle.StateCategoryPreconditioningSchedule,
 	}
 	if len(vehicleDataEndpoints) != len(want) {
 		t.Errorf("registry has %d endpoints, want %d", len(vehicleDataEndpoints), len(want))
@@ -87,7 +89,7 @@ func TestDefaultVehicleDataEndpoints(t *testing.T) {
 // The API only grows: removing one of these endpoints must be a deliberate change of this test.
 func TestVehicleDataEndpointNamesFloor(t *testing.T) {
 	names := VehicleDataEndpointNames()
-	for _, endpoint := range []string{"charge_state", "climate_state", "drive_state", "closures_state", "tire_pressure", "software_update", "location_data"} {
+	for _, endpoint := range []string{"charge_state", "climate_state", "drive_state", "closures_state", "tire_pressure", "software_update", "location_data", "charge_schedule_data", "preconditioning_schedule_data"} {
 		if !slices.Contains(names, endpoint) {
 			t.Errorf("endpoint %q is missing from VehicleDataEndpointNames()", endpoint)
 		}

@@ -1,0 +1,48 @@
+{
+  "timestamp": 1767254400,
+  "charge_schedules": [
+    {
+      "id": 1767225600,
+      "name": "Home",
+      "days_of_week": 62,
+      "start_enabled": true,
+      "start_time": 1380,
+      "end_enabled": true,
+      "end_time": 420,
+      "one_time": false,
+      "enabled": true,
+      "latitude": 45.764,
+      "longitude": 4.8357
+    },
+    {
+      "id": 1767225601,
+      "name": "Work",
+      "days_of_week": 65,
+      "start_enabled": true,
+      "start_time": 600,
+      "end_enabled": false,
+      "end_time": 900,
+      "one_time": true,
+      "enabled": false,
+      "latitude": 44.8378,
+      "longitude": -0.5792
+    }
+  ],
+  "charge_schedule_window": {
+    "id": 1767225602,
+    "name": "",
+    "days_of_week": 2,
+    "start_enabled": true,
+    "start_time": 1320,
+    "end_enabled": true,
+    "end_time": 360,
+    "one_time": false,
+    "enabled": true,
+    "latitude": 0,
+    "longitude": 0
+  },
+  "charge_buffer": 15,
+  "max_num_charge_schedules": 10,
+  "next_schedule": true,
+  "show_schedule_complete_state": false
+}

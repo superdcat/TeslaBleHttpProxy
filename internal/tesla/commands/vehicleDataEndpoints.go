@@ -6,7 +6,9 @@
 // are those of Lenart12 94d1fd8 (wimaha 2.3.0 had tire-pressure and software-update, never
 // served); their typed models are written for the fork. The location_data name is that of the
 // Fleet API and of Lenart12 94d1fd8 (absent from wimaha 2.3.0); its typed model, a subset of
-// LocationState, is written for the fork.
+// LocationState, is written for the fork. The charge_schedule_data and preconditioning_schedule_data
+// names are those of the Fleet API and of Lenart12 94d1fd8 (wimaha 2.3.0 had charge-schedule and
+// precondition-schedule, never served); their typed models are written for the fork.
 
 package commands
 
@@ -50,6 +52,12 @@ var vehicleDataEndpoints = map[string]vehicleDataEndpoint{
 	}},
 	"location_data": {vehicle.StateCategoryLocation, func(d *carserver.VehicleData) any {
 		return models.LocationDataFromBle(d)
+	}},
+	"charge_schedule_data": {vehicle.StateCategoryChargeSchedule, func(d *carserver.VehicleData) any {
+		return models.ChargeScheduleDataFromBle(d)
+	}},
+	"preconditioning_schedule_data": {vehicle.StateCategoryPreconditioningSchedule, func(d *carserver.VehicleData) any {
+		return models.PreconditioningScheduleDataFromBle(d)
 	}},
 }
 

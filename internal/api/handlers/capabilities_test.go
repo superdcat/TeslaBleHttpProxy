@@ -187,7 +187,7 @@ func TestCapabilitiesAnnounceVehicleDataEndpoints(t *testing.T) {
 		t.Fatalf("invalid JSON %q: %v", rec.Body.String(), err)
 	}
 	got := ret.Response.Response.Endpoints
-	for _, want := range []string{"charge_state", "climate_state", "drive_state", "closures_state", "tire_pressure", "software_update", "location_data"} {
+	for _, want := range []string{"charge_state", "climate_state", "drive_state", "closures_state", "tire_pressure", "software_update", "location_data", "charge_schedule_data", "preconditioning_schedule_data"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("vehicle_data_endpoints %v does not contain %q", got, want)
 		}

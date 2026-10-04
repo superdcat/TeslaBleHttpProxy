@@ -141,3 +141,17 @@ func TestLocationDataMatchesGolden(t *testing.T) {
 	readWireInput(t, "location_data", &vd)
 	checkGolden(t, "location_data.golden.json", LocationDataFromBle(&vd))
 }
+
+// TestChargeScheduleDataMatchesGolden pins the wire encoding and the JSON of charge_schedule_data (UC1019).
+func TestChargeScheduleDataMatchesGolden(t *testing.T) {
+	var vd carserver.VehicleData
+	readWireInput(t, "charge_schedule_data", &vd)
+	checkGolden(t, "charge_schedule_data.golden.json", ChargeScheduleDataFromBle(&vd))
+}
+
+// TestPreconditioningScheduleDataMatchesGolden pins the wire encoding and the JSON of preconditioning_schedule_data (UC1019).
+func TestPreconditioningScheduleDataMatchesGolden(t *testing.T) {
+	var vd carserver.VehicleData
+	readWireInput(t, "preconditioning_schedule_data", &vd)
+	checkGolden(t, "preconditioning_schedule_data.golden.json", PreconditioningScheduleDataFromBle(&vd))
+}

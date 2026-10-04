@@ -61,7 +61,7 @@ type queuedVehicleData struct {
 
 // vehicleDataQueue replaces the BLE queue: it notes each queued read and answers like the BLE loop,
 // from the wire fixtures of the models golden tests (drive_state.binpb for the drive category,
-// closures_state.binpb for the closures category, tire_pressure.binpb, software_update.binpb and location_data.binpb for theirs, vehicle_data.binpb for the others).
+// closures_state.binpb for the closures category, tire_pressure.binpb, software_update.binpb and location_data.binpb, charge_schedule_data.binpb and preconditioning_schedule_data.binpb for theirs, vehicle_data.binpb for the others).
 func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
 	t.Helper()
 	queued := &[]queuedVehicleData{}
@@ -70,11 +70,13 @@ func vehicleDataQueue(t *testing.T) *[]queuedVehicleData {
 		*queued = append(*queued, queuedVehicleData{command, endpoints, autoWakeup})
 		read := func(_ context.Context, category vehicle.StateCategory) (*carserver.VehicleData, error) {
 			name, ok := map[vehicle.StateCategory]string{
-				vehicle.StateCategoryDrive:          "drive_state",
-				vehicle.StateCategoryClosures:       "closures_state",
-				vehicle.StateCategoryTirePressure:   "tire_pressure",
-				vehicle.StateCategorySoftwareUpdate: "software_update",
-				vehicle.StateCategoryLocation:       "location_data",
+				vehicle.StateCategoryDrive:                   "drive_state",
+				vehicle.StateCategoryClosures:                "closures_state",
+				vehicle.StateCategoryTirePressure:            "tire_pressure",
+				vehicle.StateCategorySoftwareUpdate:          "software_update",
+				vehicle.StateCategoryLocation:                "location_data",
+				vehicle.StateCategoryChargeSchedule:          "charge_schedule_data",
+				vehicle.StateCategoryPreconditioningSchedule: "preconditioning_schedule_data",
 			}[category]
 			if !ok {
 				name = "vehicle_data"
@@ -246,6 +248,17 @@ func TestVehicleDataUnsupportedEndpoint(t *testing.T) {
 		{"location_state", "location_state"},
 		{"location-data", "location-data"},
 		{"location_data;", ""},
+		{"charge_schedule", "charge_schedule"},
+		{"Charge_Schedule_Data", "Charge_Schedule_Data"},
+		{"charge_schedule_state", "charge_schedule_state"},
+		{"charge-schedule-data", "charge-schedule-data"},
+		{"charge_schedule_data;", ""},
+		{"precondition-schedule", "precondition-schedule"},
+		{"preconditioning_schedule", "preconditioning_schedule"},
+		{"precondition_schedule_data", "precondition_schedule_data"},
+		{"Preconditioning_Schedule_Data", "Preconditioning_Schedule_Data"},
+		{"preconditioning_schedule_state", "preconditioning_schedule_state"},
+		{"preconditioning_schedule_data;", ""},
 		{"charge_state;nimportequoi", "nimportequoi"},
 		{"drive_state;", ""},
 		{"closures", "closures"},
@@ -445,6 +458,68 @@ func TestVehicleDataLocationData(t *testing.T) {
 	}
 	if wantQueued := []queuedVehicleData{{"vehicle_data", []string{"charge_state", "location_data"}, false}}; !reflect.DeepEqual(*queued, wantQueued) {
 		t.Errorf("queued %+v, want %+v", *queued, wantQueued)
+	}
+}
+
+// UC1019 AC3: charge_schedule_data and preconditioning_schedule_data are served in the standard
+// envelope, alone and combined (the semicolon is encoded); the wake-up stays opt-in.
+func TestVehicleDataScheduleData(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	queued := vehicleDataQueue(t)
+	charge := compactGolden(t, "charge_schedule_data.golden.json")
+	precondition := compactGolden(t, "preconditioning_schedule_data.golden.json")
+
+	for _, tc := range []struct {
+		query     string
+		endpoints []string
+		body      string
+	}{
+		{"charge_schedule_data", []string{"charge_schedule_data"}, `{"charge_schedule_data":` + charge + `}`},
+		{"preconditioning_schedule_data", []string{"preconditioning_schedule_data"}, `{"preconditioning_schedule_data":` + precondition + `}`},
+		{"charge_schedule_data;preconditioning_schedule_data", []string{"charge_schedule_data", "preconditioning_schedule_data"},
+			`{"charge_schedule_data":` + charge + `,"preconditioning_schedule_data":` + precondition + `}`},
+	} {
+		resetVehicleDataCache()
+		*queued = nil
+		rec := getVehicleData(t, "?endpoints="+url.QueryEscape(tc.query))
+		if want := vehicleDataBody(tc.body); rec.Code != http.StatusOK || rec.Body.String() != want {
+			t.Errorf("%s: got %d %s\nwant 200 %s", tc.query, rec.Code, rec.Body.String(), want)
+		}
+		if wantQueued := []queuedVehicleData{{"vehicle_data", tc.endpoints, false}}; !reflect.DeepEqual(*queued, wantQueued) {
+			t.Errorf("%s: queued %+v, want %+v", tc.query, *queued, wantQueued)
+		}
+	}
+
+	resetVehicleDataCache()
+	if rec := getVehicleData(t, "?endpoints=charge_schedule_data&wakeup=true"); rec.Code != http.StatusOK {
+		t.Fatalf("wakeup: got %d %s", rec.Code, rec.Body.String())
+	}
+	if last := (*queued)[len(*queued)-1]; !last.autoWakeup {
+		t.Errorf("last queued read %+v, want autoWakeup", last)
+	}
+}
+
+// UC1019 AC2 over HTTP: a vehicle without any schedule gives 200 and [] on both sides.
+func TestVehicleDataScheduleDataEmpty(t *testing.T) {
+	useVehicleDataCache(t, 30)
+	useQueue(t, func(ctx context.Context, command string, vin string, body map[string]interface{}, response *models.ApiResponse, autoWakeup bool) error {
+		endpoints, _ := body["endpoints"].([]string)
+		j, _, err := commands.VehicleDataJSON(ctx, endpoints, func(context.Context, vehicle.StateCategory) (*carserver.VehicleData, error) {
+			return &carserver.VehicleData{}, nil
+		})
+		if err != nil {
+			response.Error = err.Error()
+		} else {
+			response.Result, response.Response = true, j
+		}
+		response.Finish()
+		return nil
+	})
+
+	rec := getVehicleData(t, "?endpoints="+url.QueryEscape("charge_schedule_data;preconditioning_schedule_data"))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, `"charge_schedules":[]`) || !strings.Contains(body, `"precondition_schedules":[]`) || strings.Contains(body, "null") {
+		t.Errorf("got %d %s", rec.Code, body)
 	}
 }
 
