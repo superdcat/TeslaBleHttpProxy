@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go/version"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +10,13 @@ import (
 )
 
 const publishWorkflow = ".github/workflows/release.yml"
+
+// minSupportedGo is the oldest Go language version the module may declare.
+// Raise it by hand, together with the go line of go.mod.
+const minSupportedGo = "go1.26"
+
+// builderFromRe matches the builder FROM line and captures the full Go release (no floating tag).
+var builderFromRe = regexp.MustCompile(`^FROM --platform=\$\{BUILDPLATFORM\} golang:(\d+\.\d+\.\d+) AS builder$`)
 
 func readRepoFile(t *testing.T, name string) string {
 	t.Helper()
@@ -87,15 +95,30 @@ func TestDockerImageRuntimeContract(t *testing.T) {
 	}
 }
 
-func TestDockerBuildTakesVersionFromBuildArg(t *testing.T) {
+// builderStage returns the lines of the first Dockerfile stage (the builder).
+func builderStage(t *testing.T) []string {
+	t.Helper()
 	stages := dockerStages(readRepoFile(t, "Dockerfile"))
 	if len(stages) == 0 {
 		t.Fatalf("Dockerfile has no FROM stage")
 	}
-	builder := stages[0]
-	if !strings.HasPrefix(builder[0], "FROM --platform=${BUILDPLATFORM} golang:1.25.") {
-		t.Errorf("builder stage = %q, want a golang:1.25.x image on the build platform (cross-compilation, no QEMU)", builder[0])
+	return stages[0]
+}
+
+// builderImageVersion returns the Go release (X.Y.Z) of the builder image.
+func builderImageVersion(t *testing.T) string {
+	t.Helper()
+	line := builderStage(t)[0]
+	m := builderFromRe.FindStringSubmatch(line)
+	if m == nil {
+		t.Fatalf("builder stage = %q, want a golang image on the build platform (cross-compilation, no QEMU): FROM --platform=${BUILDPLATFORM} golang:X.Y.Z AS builder (full release, no floating tag)", line)
 	}
+	return m[1]
+}
+
+func TestDockerBuildTakesVersionFromBuildArg(t *testing.T) {
+	builder := builderStage(t)
+	builderImageVersion(t)
 	for _, want := range []string{"ARG TARGETVARIANT", "ARG GOARM=${TARGETVARIANT#v}", "ARG VERSION"} {
 		if !contains(builder, want) {
 			t.Errorf("builder stage misses %q", want)
@@ -216,6 +239,97 @@ func TestWorkflowActionsPinnedToCommitSHA(t *testing.T) {
 			}
 			if !commentRe.MatchString(strings.TrimSpace(m[2])) {
 				t.Errorf("%s:%d: %q lacks a trailing \"# vX.Y.Z\" comment", file, i+1, m[1])
+			}
+		}
+	}
+}
+
+func TestGoToolchainVersionsAgree(t *testing.T) {
+	// go.mod: one valid go line, not below the floor, and no toolchain line.
+	goLine := ""
+	for _, line := range meaningfulLines(readRepoFile(t, "go.mod")) {
+		switch {
+		case strings.HasPrefix(line, "toolchain "):
+			t.Errorf("go.mod has %q: no toolchain line, the Docker build runs with GOTOOLCHAIN=local", line)
+		case strings.HasPrefix(line, "go "):
+			if goLine != "" {
+				t.Errorf("go.mod has several go lines")
+			}
+			goLine = strings.TrimSpace(strings.TrimPrefix(line, "go "))
+		}
+	}
+	if !version.IsValid("go" + goLine) {
+		t.Fatalf("go.mod go line = go%s, want a valid Go version", goLine)
+	}
+	if version.Compare("go"+goLine, minSupportedGo) < 0 {
+		t.Errorf("go.mod requires go%s, below the supported floor %s", goLine, minSupportedGo)
+	}
+	modLang := version.Lang("go" + goLine)
+
+	// Dockerfile builder: the full go line must not exceed the full image release.
+	imageVersion := builderImageVersion(t)
+	imageLang := version.Lang("go" + imageVersion)
+	if version.Compare("go"+goLine, "go"+imageVersion) > 0 {
+		t.Errorf("go.mod requires go%s but the builder image only provides go%s", goLine, imageVersion)
+	}
+
+	// Workflows: GO_VERSION is the image line, go-version always reads GO_VERSION.
+	files, err := filepath.Glob(".github/workflows/*.yml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no workflow found: %v", err)
+	}
+	wantCI := strings.TrimPrefix(imageLang, "go") + ".x"
+	found := false
+	for _, file := range files {
+		for _, line := range meaningfulLines(readRepoFile(t, file)) {
+			if rest, ok := strings.CutPrefix(line, "GO_VERSION:"); ok {
+				found = true
+				if got := strings.Trim(strings.TrimSpace(rest), `"'`); got != wantCI {
+					t.Errorf("%s: GO_VERSION = %q, want %q (the builder image line)", file, got, wantCI)
+				}
+			}
+			if strings.HasPrefix(line, "go-version") && line != "go-version: ${{ env.GO_VERSION }}" {
+				t.Errorf("%s: %q: a matrix or a go-version-file would break the image / CI alignment", file, line)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no GO_VERSION found in the workflows")
+	}
+
+	// Lint configuration: the language version follows go.mod.
+	wantLint := `go: "` + strings.TrimPrefix(modLang, "go") + `"`
+	for _, file := range []string{".golangci.yml", ".golangci.bck.yml"} {
+		if !contains(meaningfulLines(readRepoFile(t, file)), wantLint) {
+			t.Errorf("%s misses %s", file, wantLint)
+		}
+	}
+}
+
+func TestDependabotWatchesActionsModulesAndBuilder(t *testing.T) {
+	var blocks [][]string
+	for _, line := range meaningfulLines(readRepoFile(t, ".github/dependabot.yml")) {
+		if strings.HasPrefix(line, "- package-ecosystem:") {
+			blocks = append(blocks, nil)
+		}
+		if len(blocks) > 0 {
+			blocks[len(blocks)-1] = append(blocks[len(blocks)-1], line)
+		}
+	}
+	for _, ecosystem := range []string{"github-actions", "gomod", "docker"} {
+		var block []string
+		for _, b := range blocks {
+			if b[0] == "- package-ecosystem: "+ecosystem {
+				block = b
+			}
+		}
+		if block == nil {
+			t.Errorf("dependabot.yml has no %s entry", ecosystem)
+			continue
+		}
+		for _, want := range []string{"directory: /", "interval: monthly", "groups:", `- "*"`} {
+			if !contains(block, want) {
+				t.Errorf("dependabot.yml %s entry misses %q", ecosystem, want)
 			}
 		}
 	}

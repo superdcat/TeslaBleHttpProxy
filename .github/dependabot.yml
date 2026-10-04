@@ -8,3 +8,24 @@ updates:
       github-actions:
         patterns:
           - "*"
+  # Go modules: direct dependencies only; the SDK stays the official teslamotors module (no replace).
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    # Leave a new release 7 days before proposing it.
+    cooldown:
+      default-days: 7
+    groups:
+      go-modules:
+        patterns:
+          - "*"
+  # Builder image: a new golang:1.N line also needs GO_VERSION in the workflows (packaging_test.go fails otherwise).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      docker:
+        patterns:
+          - "*"

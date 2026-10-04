@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 env:
-  GO_VERSION: ^1.25
+  GO_VERSION: "1.27.x"
   IMAGE: ghcr.io/superdcat/tesla-ble-http-proxy
   PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
 
