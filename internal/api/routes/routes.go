@@ -23,6 +23,7 @@ func SetupRoutes(static fs.FS, html fs.FS) *mux.Router {
 	router.HandleFunc("/api/1/vehicles/{vin}/body_controller_state", handlers.BodyControllerState).Methods("GET")
 	router.HandleFunc("/api/proxy/1/version", handlers.Version).Methods("GET")
 	router.HandleFunc("/api/proxy/1/capabilities", handlers.Capabilities(func() []string { return proxyRouteNames(router) })).Methods("GET")
+	router.HandleFunc("/api/proxy/1/vehicles/{vin}/connection_status", handlers.ConnectionStatus).Methods("GET")
 	router.HandleFunc("/dashboard", handlers.ShowDashboard(html)).Methods("GET")
 	router.HandleFunc("/logs", handlers.ShowLogViewer(html)).Methods("GET")
 	router.HandleFunc("/api/logs", handlers.GetLogs).Methods("GET")

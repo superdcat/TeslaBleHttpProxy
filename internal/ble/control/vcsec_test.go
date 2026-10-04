@@ -23,6 +23,7 @@ func TestVcsecOnlyConnection(t *testing.T) {
 		attempts int
 	}{
 		{commands.Command{Command: commands.BodyControllerStateCommand, Domain: commands.Domain.VCSEC}, true, 1},
+		{commands.Command{Command: commands.ConnectionStatusCommand, Domain: commands.Domain.VCSEC}, true, 1},
 		{commands.Command{Command: "wake_up"}, false, 3},
 		{commands.Command{Command: "wake_up", Domain: commands.Domain.VCSEC}, false, 3},
 		{commands.Command{Command: "door_lock"}, false, 3},
@@ -41,9 +42,13 @@ func TestVcsecOnlyConnection(t *testing.T) {
 func TestPushCommandSetsDomain(t *testing.T) {
 	bc := newTestQueue()
 	_ = bc.PushCommand(context.Background(), commands.BodyControllerStateCommand, testVIN, nil, models.NewApiResponse(context.Background()), false)
+	_ = bc.PushCommand(context.Background(), commands.ConnectionStatusCommand, testVIN, nil, models.NewApiResponse(context.Background()), false)
 	_ = bc.PushCommand(context.Background(), "door_lock", testVIN, nil, nil, true)
 	if got := (<-bc.commandStack).Domain; got != commands.Domain.VCSEC {
 		t.Errorf("body controller state domain = %q, want vcsec", got)
+	}
+	if got := (<-bc.commandStack).Domain; got != commands.Domain.VCSEC {
+		t.Errorf("connection status domain = %q, want vcsec", got)
 	}
 	if got := (<-bc.commandStack).Domain; got != commands.Domain.None {
 		t.Errorf("door_lock domain = %q, want none (2.3.0)", got)

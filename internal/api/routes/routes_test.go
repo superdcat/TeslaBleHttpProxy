@@ -102,6 +102,7 @@ func TestFrozenRoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/1/vehicles/VIN/command/flash_lights", true, nil},
 		{http.MethodGet, "/api/1/vehicles/VIN/vehicle_data", true, nil},
 		{http.MethodGet, "/api/1/vehicles/VIN/body_controller_state", true, nil},
+		{http.MethodGet, "/api/proxy/1/vehicles/VIN/connection_status", true, nil},
 		{http.MethodGet, "/api/proxy/1/version", true, nil},
 		{http.MethodGet, "/api/proxy/1/capabilities", true, nil},
 		{http.MethodGet, "/dashboard", true, nil},
@@ -119,6 +120,8 @@ func TestFrozenRoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/proxy/1/version", false, mux.ErrMethodMismatch},
 		{http.MethodPost, "/api/proxy/1/capabilities", false, mux.ErrMethodMismatch},
 		{http.MethodHead, "/api/proxy/1/capabilities", false, mux.ErrMethodMismatch},
+		{http.MethodPost, "/api/proxy/1/vehicles/VIN/connection_status", false, mux.ErrMethodMismatch},
+		{http.MethodHead, "/api/proxy/1/vehicles/VIN/connection_status", false, mux.ErrMethodMismatch},
 	}
 
 	for _, tt := range tests {
@@ -171,8 +174,7 @@ func TestCapabilitiesRouteListsProxyRoutes(t *testing.T) {
 		t.Errorf("proxyRoutePrefix = %q, want %q (from api field)", proxyRoutePrefix, want)
 	}
 
-	// UC1020 will add "connection_status".
-	want := []string{"capabilities", "version"}
+	want := []string{"capabilities", "connection_status", "version"}
 	if got := ret.Response.Response.ProxyRoutes; !slices.Equal(got, want) {
 		t.Errorf("proxy_routes = %v, want %v", got, want)
 	}

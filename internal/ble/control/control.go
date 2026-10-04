@@ -43,6 +43,12 @@ type BleControl struct {
 	// Cache to track when each vehicle was last confirmed awake
 	lastAwakeTime map[string]time.Time
 	awakeTimeMu   sync.RWMutex
+
+	// operatedBeacon is the scan result that opened the connection operated by the queue: it
+	// answers connection_status for that connection without a new scan. Read and written only by
+	// the Loop goroutine (TryConnectToVehicle sets it, operateConnection clears it); the temporary
+	// instance of key.go (SendKeysToVehicle) sets it through TryConnectToVehicle but never reads it.
+	operatedBeacon *ble.ScanResult
 }
 
 func NewBleControl() (*BleControl, error) {
@@ -147,6 +153,11 @@ func (bc *BleControl) markVehicleAwake(vin string) {
 func (bc *BleControl) connectToVehicleAndOperateConnection(firstCommand *commands.Command) *commands.Command {
 	// Taken from the queue after its client stopped waiting: never connect.
 	if skipAbandonedCommand(firstCommand, stageQueue) {
+		return nil
+	}
+	// A scan alone answers connection_status: no connection, no session, no wake-up.
+	if firstCommand.Command == commands.ConnectionStatusCommand {
+		serveConnectionStatus(firstCommand, nil)
 		return nil
 	}
 	logging.Info("Connecting to Vehicle ...")
@@ -424,7 +435,9 @@ func (bc *BleControl) TryConnectToVehicle(ctx context.Context, firstCommand *com
 		logging.Info("Key-Request connection established ...")
 	}
 
-	// everything fine
+	// everything fine; connection_status is answered from this scan while the connection is open
+	// (see operateConnection)
+	bc.operatedBeacon = scanResult
 	shouldDefer = false
 	return conn, car, false, nil
 }
@@ -432,6 +445,7 @@ func (bc *BleControl) TryConnectToVehicle(ctx context.Context, firstCommand *com
 func (bc *BleControl) operateConnection(car *vehicle.Vehicle, firstCommand *commands.Command) *commands.Command {
 	logging.Debug("Operating connection ...")
 	//defer log.Debug("operating connection done")
+	defer func() { bc.operatedBeacon = nil }()
 	connectionCtx, cancel := context.WithTimeout(context.Background(), 29*time.Second)
 	defer cancel()
 
@@ -472,6 +486,16 @@ func (bc *BleControl) operateConnection(car *vehicle.Vehicle, firstCommand *comm
 		if command.Vin != firstCommand.Vin {
 			logging.Debug("New VIN, closing connection ...")
 			return true, command
+		}
+
+		// Answered from the scan that opened this connection: no scan while it is open.
+		if command.Command == commands.ConnectionStatusCommand {
+			if bc.operatedBeacon == nil {
+				logging.Warn("No scan result for the open connection, closing it", "Command", command.Command)
+				return true, command
+			}
+			serveConnectionStatus(command, bc.operatedBeacon)
+			return false, nil
 		}
 
 		cmd, err, ctx := bc.ExecuteCommand(car, command, connectionCtx)

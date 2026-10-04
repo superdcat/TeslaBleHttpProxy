@@ -8,7 +8,7 @@ This is the log level. Options: debug (Default: info)
 
 ## scanTimeout
 
-This is the number of seconds to scan for BLE devices. If set to 0, the scan will continue until a device is found or the context is cancelled. (Default: 5) If the vehicle is sometimes not found, consider increasing this value.
+This is the number of seconds to scan for BLE devices. If set to 0, the scan will continue until a device is found or the context is cancelled. (Default: 5) If the vehicle is sometimes not found, consider increasing this value. It also bounds the scan of the `connection_status` route (5 seconds when set to 0, which would otherwise never end); above about 13 seconds a vehicle that is not seen makes that route answer `503 context deadline exceeded`, because the request is limited to 15 seconds.
 
 ## cacheMaxAge
 

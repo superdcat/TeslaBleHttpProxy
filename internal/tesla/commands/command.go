@@ -20,12 +20,18 @@ var Domain = struct {
 // It is not accepted on the command route (IsSupportedCommand).
 const BodyControllerStateCommand = "body-controller-state"
 
+// ConnectionStatusCommand is the queued command of GET /api/proxy/1/vehicles/{vin}/connection_status.
+// The BLE queue serves it with a scan, without connecting; it is not accepted on the command route
+// (IsSupportedCommand).
+const ConnectionStatusCommand = "connection_status"
+
 // CommandDomain returns the domain a queued command needs: VCSEC for body_controller_state, which
-// never wakes the vehicle; None for the others, whose connection starts the infotainment session
-// and wakes the vehicle as in wimaha 2.3.0.
+// never wakes the vehicle, and for connection_status, which opens no session at all (VCSEC only so
+// that a connection could never wake the vehicle); None for the others, whose connection starts the
+// infotainment session and wakes the vehicle as in wimaha 2.3.0.
 // Adapted from Lenart12/TeslaBleHttpProxy (Command.Domain, commit 94d1fd8).
 func CommandDomain(command string) DomainType {
-	if command == BodyControllerStateCommand {
+	if command == BodyControllerStateCommand || command == ConnectionStatusCommand {
 		return Domain.VCSEC
 	}
 	return Domain.None

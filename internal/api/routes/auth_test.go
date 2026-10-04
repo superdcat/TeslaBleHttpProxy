@@ -81,6 +81,7 @@ func frozenRoutes() []routeCase {
 		{"POST", "/api/1/vehicles/" + testVIN + "/command/flash_lights", "", accessBearer, 503, notInitialized("flash_lights"), ""},
 		{"GET", "/api/1/vehicles/" + testVIN + "/vehicle_data", "", accessBearer, 503, notInitialized("vehicle_data"), ""},
 		{"GET", "/api/1/vehicles/" + testVIN + "/body_controller_state", "", accessBearer, 503, notInitialized("body-controller-state"), ""},
+		{"GET", "/api/proxy/1/vehicles/" + testVIN + "/connection_status", "", accessBearer, 503, notInitialized("connection_status"), ""},
 		{"GET", "/api/proxy/1/version", "", accessOpen, 200, `{"response":{"result":true,"reason":"The request was successfully processed.","vin":"","command":"","response":{"version":*`, ""},
 		{"GET", "/api/proxy/1/capabilities", "", accessOpen, 200, `{"response":{"result":true,"reason":"The request was successfully processed.","vin":"","command":"capabilities"*`, ""},
 		{"GET", "/dashboard", "", accessBasic, 200, "page", ""},

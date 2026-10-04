@@ -135,6 +135,9 @@ func (command *Command) Send(ctx context.Context, car *vehicle.Vehicle) (shouldR
 		if command.Response != nil {
 			command.Response.Response = vsJson
 		}
+	case "connection_status":
+		// Defensive: the BLE queue answers it with a scan before any connection.
+		return false, fmt.Errorf("connection_status is served by the BLE queue scan, never sent to the vehicle")
 	default:
 		return false, fmt.Errorf("unrecognized command: %s", command.Command)
 	}

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ func TestCommandDomain(t *testing.T) {
 		want    DomainType
 	}{
 		{BodyControllerStateCommand, Domain.VCSEC},
+		{ConnectionStatusCommand, Domain.VCSEC},
 		{"wake_up", Domain.None},
 		{"door_lock", Domain.None},
 		{"actuate_trunk", Domain.None},
@@ -71,5 +73,25 @@ func TestBodyControllerStateIsQueuedOnly(t *testing.T) {
 	}
 	if IsSupportedCommand(BodyControllerStateCommand) {
 		t.Errorf("%q must not be accepted on the command route", BodyControllerStateCommand)
+	}
+}
+
+func TestConnectionStatusIsQueuedOnly(t *testing.T) {
+	if ConnectionStatusCommand != "connection_status" {
+		t.Errorf("ConnectionStatusCommand = %q", ConnectionStatusCommand)
+	}
+	// Defensive case of Send: the queue answers with a scan, nothing is ever sent to the vehicle.
+	if !sendSwitchCases(t)[ConnectionStatusCommand] {
+		t.Errorf("Send has no case %q", ConnectionStatusCommand)
+	}
+	retry, err := (&Command{Command: ConnectionStatusCommand}).Send(context.Background(), nil)
+	if retry || err == nil || err.Error() != "connection_status is served by the BLE queue scan, never sent to the vehicle" {
+		t.Errorf("Send = (%t, %v), want an explicit error without retry", retry, err)
+	}
+	if IsSupportedCommand(ConnectionStatusCommand) {
+		t.Errorf("%q must not be accepted on the command route", ConnectionStatusCommand)
+	}
+	if slices.Contains(FleetCommandNames(), ConnectionStatusCommand) {
+		t.Errorf("%q must not be a fleet command", ConnectionStatusCommand)
 	}
 }

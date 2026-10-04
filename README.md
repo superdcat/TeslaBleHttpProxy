@@ -29,6 +29,7 @@ The program stores the received requests in a queue and processes them one by on
   - [Vehicle Commands](#vehicle-commands)
   - [Vehicle Data](#vehicle-data)
   - [Body Controller State](#body-controller-state)
+  - [Connection Status (superdcat fork)](#connection-status-superdcat-fork)
   - [Version of Proxy](#version-of-proxy)
   - [Capabilities of Proxy (superdcat fork)](#capabilities-of-proxy-superdcat-fork)
 - [Troubleshooting](#troubleshooting)
@@ -378,6 +379,33 @@ The body controller state is fetched from the vehicle and returnes the state of 
 Get body controller state:
 `http://localhost:8080/api/1/vehicles/{VIN}/body_controller_state`
 
+### Connection Status (superdcat fork)
+
+Tells whether the vehicle is in Bluetooth range and with which signal, **without waking it up**:
+`http://localhost:8080/api/proxy/1/vehicles/{VIN}/connection_status`
+
+*(Method GET only; body and parameters are ignored. With `apiToken` set, send it as a Bearer token.)* Adapted from Lenart12/TeslaBleHttpProxy (commits 6ca3e0e and b971a05) and rewritten for the queue of this proxy.
+
+The request goes through the BLE command queue and makes **one scan** of the radio announcements of the vehicle: no connection, no session, no wake-up. It waits for the command in progress, and answers `503` with `context deadline exceeded` when the queue stays busy so long that the scan cannot finish within 15 seconds. The scan lasts `scanTimeout` seconds (5 when it is 0). The answer is never cached (`Cache-Control: no-cache, no-store, must-revalidate`). A vehicle seen:
+
+```json
+{"response":{"result":true,"reason":"The request was successfully processed.","vin":"<VIN>","command":"connection_status","response":{"local_name":"S0123456789abcdefC","connectable":true,"address":"aa:bb:cc:dd:ee:ff","rssi":-67,"operated":false}}}
+```
+
+- `local_name`: Bluetooth name of the vehicle (derived from the VIN).
+- `connectable`: the vehicle accepts a connection. `false` together with an `rssi` usually means it has reached its limit of connected devices (see [BLE Device Limit](#ble-device-limit-maximum-3-devices)).
+- `address`: Bluetooth address (MAC) of the vehicle, or `null`. **It is exposed to everyone who can reach the proxy when no `apiToken` is set.**
+- `rssi`: signal strength in dBm (about -30 very close, -100 very weak), or `null`.
+- `operated`: `true` when the proxy already holds a connection to this vehicle (the connection of a command that keeps it open for about 29 seconds; not `body_controller_state`, whose VCSEC connection is closed right away, so `operated` is never `true` just after a `body_controller_state`): it then answers without scanning, with the scan that opened that connection, so `rssi` can be up to 29 seconds old.
+
+**Vehicle not seen** (`200`, `result` true): `connectable` `false`, `address` and `rssi` `null`, `operated` `false`, and `local_name` is the name expected for the VIN (a wrong VIN shows up here: it is not validated). **`rssi: null` is the rule to read a vehicle as out of range.** It takes the whole scan window (up to `scanTimeout`; about 6 seconds in total with the queue loop).
+
+Errors (`503`, `result` false): `BleControl is not initialized. Maybe private.pem is missing.`; `context deadline exceeded` (queue busy, or the 15 seconds elapsed during the scan: **it never means that the vehicle is out of range**, a vehicle that is not seen answers `200`); `context canceled` (the client hung up); `failed to scan for vehicle: <error>` (Bluetooth adapter or scan error). With a `scanTimeout` above about 13 seconds, a vehicle that is not seen answers `503 context deadline exceeded`.
+
+Differences with Lenart12/TeslaBleHttpProxy: same route and same five fields, but the proxy does not retry a failed scan; when the open connection belongs to another VIN it is closed, then the vehicle is scanned; the answer is never cached; a request that ends is never reported as "not seen"; the scan lasts 5 seconds when `scanTimeout` is 0 (Lenart12 scans without end). `POST .../command/connection_status` still answers `not supported`.
+
+**Load and security.** Each call occupies the queue for about 1 second (queue loop) plus the scan (up to `scanTimeout` when the vehicle is not seen, about 6 seconds in total), during which no command is sent. Without `apiToken`, anyone who can reach the proxy can fill the 50 places of the queue: about 5 minutes without any other command (an unlock included), the same order of magnitude as `body_controller_state`. **Set `apiToken`** (a Bearer is then required) and poll sparingly (once per minute is plenty). Probing two VINs alternately closes the open connection each time and forces reconnections for the commands that follow.
+
 ### Version of Proxy
 
 Get version of proxy:
@@ -396,7 +424,7 @@ The route answers without a vehicle, without Bluetooth and without an installed 
 - `version`, `flavor`: as in the version route.
 - `commands`: the Fleet vehicle commands supported by the proxy (the legacy route commands `vehicle_data` and `session_info` are not listed).
 - `vehicle_data_endpoints`: the endpoints accepted by `vehicle_data`.
-- `proxy_routes`: the proxy-specific routes under `/api/proxy/1/` (last path segment).
+- `proxy_routes`: the proxy-specific routes under `/api/proxy/1/` (last path segment): `capabilities`, `connection_status` and `version`.
 - `features`: `strict_body_validation`, `body_controller_state_queued`, `auth_required`.
 - `key_role`: role of the active key (`owner` or `charging_manager`), or an empty string when no key is installed for it.
 
