@@ -90,21 +90,37 @@ func (bc *BleControl) serveNextCommand(retryCommand *commands.Command) *commands
 			return nil
 		}
 		logging.Info("Retrying command", "Command", retryCommand.Command, "Body", retryCommand.Body)
-		return bc.connectToVehicleAndOperateConnection(retryCommand)
+		return bc.serveCommand(retryCommand)
 	}
 	logging.Debug("Waiting for next command ...")
 	// Wait for the next command
 	select {
 	case command, ok := <-bc.providerStack:
 		if ok {
-			return bc.connectToVehicleAndOperateConnection(&command)
+			return bc.serveCommand(&command)
 		}
 	case command, ok := <-bc.commandStack:
 		if ok {
-			return bc.connectToVehicleAndOperateConnection(&command)
+			return bc.serveCommand(&command)
 		}
 	}
 	return nil
+}
+
+// serveCommand runs one command on a connection inside an adapter use window. With
+// releaseAdapterWhenIdle the adapter is given back once the connection is closed, only when no
+// command waits to be retried or queued.
+func (bc *BleControl) serveCommand(command *commands.Command) *commands.Command {
+	beginAdapterUse()
+	next := bc.connectToVehicleAndOperateConnection(command)
+	endAdapterUse(shouldReleaseAdapter(next, len(bc.commandStack)))
+	return next
+}
+
+// shouldReleaseAdapter tells whether the adapter may be given back after a command: nothing waits
+// to be retried (next) nor is queued.
+func shouldReleaseAdapter(next *commands.Command, queued int) bool {
+	return next == nil && queued == 0
 }
 
 // PushCommand queues a command. It gives up when ctx ends before the queue accepts the command
@@ -252,6 +268,13 @@ func (bc *BleControl) TryConnectToVehicle(ctx context.Context, firstCommand *com
 		}
 	}()
 
+	// Reopens the configured adapter if it was given back; before scanCtx, so the scan keeps its
+	// whole window.
+	if err := acquireAdapter(); err != nil {
+		retry, failure := adapterFailure(err)
+		return nil, nil, retry, failure
+	}
+
 	var err error
 	logging.Debug("Scanning for vehicle ...")
 	// Vehicle sends a beacon every ~200ms, so if it is not found in scanTimeout seconds, it is likely not in range and not worth retrying.
@@ -286,13 +309,8 @@ func (bc *BleControl) TryConnectToVehicle(ctx context.Context, firstCommand *com
 			// Scan timed out - allow retry as vehicle might be temporarily out of range or experiencing transient BLE issues
 			return nil, nil, true, fmt.Errorf("Vehicle is not in range: %s", err)
 		} else {
-			if strings.Contains(err.Error(), "operation not permitted") {
-				// The underlying BLE package calls HCIDEVDOWN on the BLE device, presumably as a
-				// heavy-handed way of dealing with devices that are in a bad state.
-				return nil, nil, false, fmt.Errorf("failed to connect to vehicle (A): %s\nTry again after granting this application CAP_NET_ADMIN:\nsudo setcap 'cap_net_admin=eip' \"$(which %s)\"", err, os.Args[0])
-			} else {
-				return nil, nil, true, fmt.Errorf("failed to connect to vehicle (A): %s", err)
-			}
+			retry, failure := adapterFailure(err)
+			return nil, nil, retry, failure
 		}
 	}
 
@@ -442,14 +460,27 @@ func (bc *BleControl) TryConnectToVehicle(ctx context.Context, firstCommand *com
 	return conn, car, false, nil
 }
 
+// adapterFailure classifies a failure to open the adapter or to scan: whether to retry, and the
+// error to report.
+func adapterFailure(err error) (bool, error) {
+	if strings.Contains(err.Error(), "operation not permitted") {
+		// The underlying BLE package calls HCIDEVDOWN on the BLE device, presumably as a
+		// heavy-handed way of dealing with devices that are in a bad state.
+		return false, fmt.Errorf("failed to connect to vehicle (A): %s\nTry again after granting this application CAP_NET_ADMIN:\nsudo setcap 'cap_net_admin=eip' \"$(which %s)\"", err, os.Args[0])
+	}
+	return true, fmt.Errorf("failed to connect to vehicle (A): %s", err)
+}
+
 func (bc *BleControl) operateConnection(car *vehicle.Vehicle, firstCommand *commands.Command) *commands.Command {
 	logging.Debug("Operating connection ...")
 	//defer log.Debug("operating connection done")
 	defer func() { bc.operatedBeacon = nil }()
-	connectionCtx, cancel := context.WithTimeout(context.Background(), 29*time.Second)
+	// The connection stays open connectionTimeout seconds (29 by default) from its opening; a
+	// shorter hold does not shorten the budget of the first command.
+	connectionCtx, firstCommandCtx, cancel := newConnectionContexts(connectionHold(), defaultConnectionHold())
 	defer cancel()
 
-	cmd, err, _ := bc.ExecuteCommand(car, firstCommand, connectionCtx)
+	cmd, err, _ := bc.ExecuteCommand(car, firstCommand, firstCommandCtx)
 	if err != nil {
 		return cmd
 	}
@@ -519,6 +550,11 @@ func (bc *BleControl) operateConnection(car *vehicle.Vehicle, firstCommand *comm
 	}
 
 	for {
+		// An expired hold closes the connection, whatever waits: no draw between the two.
+		if connectionCtx.Err() != nil {
+			logging.Debug("Connection timeout ...")
+			return nil
+		}
 		select {
 		case <-connectionCtx.Done():
 			logging.Debug("Connection timeout ...")

@@ -25,6 +25,11 @@ func main() {
 
 	config.InitConfig()
 
+	// An unknown btAdapter stops the proxy here rather than at the first command.
+	if err := control.SetupAdapter(); err != nil {
+		logging.Fatal("Cannot start with this Bluetooth adapter", "error", err)
+	}
+
 	// Migrate legacy keys to owner role structure if they exist
 	if err := control.MigrateLegacyKeys(); err != nil {
 		logging.Warn("Failed to migrate legacy keys", "error", err)

@@ -133,6 +133,9 @@ func SendKeysToVehicle(vin string, role string) error {
 		Vin:     vin,
 		Body:    map[string]interface{}{"role": role},
 	}
+	// Not served by the queue: guard the adapter against its release, and give it back after.
+	beginAdapterUse()
+	defer endAdapterUse(true)
 	conn, car, _, err := tempBleControl.TryConnectToVehicle(ctx, cmd)
 	if err == nil {
 		//Successful

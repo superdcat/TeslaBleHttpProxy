@@ -47,6 +47,14 @@ func connectionStatusOf(vin string, beacon *ble.ScanResult, operated bool) model
 	return status
 }
 
+// failConnectionStatus answers a connection_status whose scan could not run.
+func failConnectionStatus(response *models.ApiResponse, err error) {
+	logging.Error("Connection status scan failed", "Error", err)
+	response.Error = "failed to scan for vehicle: " + err.Error()
+	response.Result = false
+	response.Finish()
+}
+
 // serveConnectionStatus answers a connection_status command and releases its waiting handler. With
 // operated (the scan that opened the connection the queue holds for this VIN) it scans nothing;
 // otherwise it scans once, for the window of connectionStatusScanWindow. It never connects.
@@ -57,6 +65,13 @@ func serveConnectionStatus(command *commands.Command, operated *ble.ScanResult) 
 	response := command.Response
 	beacon, isOperated := operated, operated != nil
 	if !isOperated {
+		if err := acquireAdapter(); err != nil {
+			if skipAbandonedCommand(command, stageConnect) {
+				return
+			}
+			failConnectionStatus(response, err)
+			return
+		}
 		parent := response.Ctx
 		if parent == nil {
 			parent = context.Background()
@@ -72,10 +87,7 @@ func serveConnectionStatus(command *commands.Command, operated *ble.ScanResult) 
 				return
 			}
 			if scanCtx.Err() == nil {
-				logging.Error("Connection status scan failed", "Error", err)
-				response.Error = "failed to scan for vehicle: " + err.Error()
-				response.Result = false
-				response.Finish()
+				failConnectionStatus(response, err)
 				return
 			}
 			// Scan window elapsed with the request alive: beacon not seen.

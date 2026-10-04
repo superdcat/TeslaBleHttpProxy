@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -96,12 +97,28 @@ type Config struct {
 	CacheMaxAge          int      // Seconds for HTTP Cache-Control header max-age (used for body controller state responses). If set to 0, cache headers are disabled.
 	VehicleDataCacheTime int      // Seconds to cache VehicleData endpoint responses in memory. Each endpoint is cached separately per VIN.
 	APIToken             APIToken // Optional API token (apiToken, UC1007); disabled when empty.
+
+	BTAdapter              string // Bluetooth adapter (btAdapter, UC1021), e.g. hci1; empty: default adapter. Validated by control.SetupAdapter.
+	ConnectionTimeout      int    // Seconds the BLE connection stays open (connectionTimeout, UC1021); 29 by default.
+	ReleaseAdapterWhenIdle bool   // Give the adapter back to BlueZ while the queue is idle (releaseAdapterWhenIdle, UC1021).
 }
 
 var AppConfig *Config
 
 // apiTokenRecommendation is logged at startup when apiToken is not set at all (UC1018).
 const apiTokenRecommendation = "apiToken is not set: anyone who can reach the proxy can send commands and read the vehicle data, location (location_data) included; setting apiToken is recommended unless a client cannot send it (evcc tesla-ble)"
+
+// maxLoggedEnvValue bounds the characters of an environment value written to the logs.
+const maxLoggedEnvValue = 64
+
+// quoteEnvValue returns v quoted (%q) and cut to maxLoggedEnvValue characters, for the logs.
+func quoteEnvValue(v string) string {
+	q := fmt.Sprintf("%q", v)
+	if r := []rune(q); len(r) > maxLoggedEnvValue {
+		return string(r[:maxLoggedEnvValue])
+	}
+	return q
+}
 
 func LoadConfig() *Config {
 	envLogLevel := os.Getenv("logLevel")
@@ -162,6 +179,31 @@ func LoadConfig() *Config {
 		logging.Warn("apiToken is blank: authentication stays disabled")
 	}
 
+	// Adapter options (UC1021): logged only when set, so a proxy without them logs as before.
+	// Raw values never go to the logs as they are: quoted and truncated (quoteEnvValue).
+	btAdapter := strings.TrimSpace(os.Getenv("btAdapter"))
+	if btAdapter != "" {
+		logging.Info("Env:", "btAdapter", quoteEnvValue(btAdapter))
+	}
+
+	rawConnectionTimeout := os.Getenv("connectionTimeout")
+	connectionTimeout, err := ParseConnectionTimeout(rawConnectionTimeout)
+	if err != nil {
+		logging.Warn(fmt.Sprintf("Invalid connectionTimeout value, using default (%d)", DefaultConnectionTimeout), "value", quoteEnvValue(rawConnectionTimeout), "error", err)
+	}
+	if strings.TrimSpace(rawConnectionTimeout) != "" {
+		logging.Info("Env:", "connectionTimeout", connectionTimeout)
+	}
+
+	rawRelease := os.Getenv("releaseAdapterWhenIdle")
+	releaseAdapterWhenIdle, err := ParseReleaseAdapterWhenIdle(rawRelease)
+	if err != nil {
+		logging.Warn("Invalid releaseAdapterWhenIdle value, adapter release stays disabled", "value", quoteEnvValue(rawRelease), "error", err)
+	}
+	if strings.TrimSpace(rawRelease) != "" {
+		logging.Info("Env:", "releaseAdapterWhenIdle", releaseAdapterWhenIdle)
+	}
+
 	return &Config{
 		LogLevel:             envLogLevel,
 		HttpListenAddress:    addr,
@@ -169,6 +211,10 @@ func LoadConfig() *Config {
 		ScanTimeout:          scanTimeoutInt,
 		VehicleDataCacheTime: vehicleDataCacheTimeInt,
 		APIToken:             apiToken,
+
+		BTAdapter:              btAdapter,
+		ConnectionTimeout:      connectionTimeout,
+		ReleaseAdapterWhenIdle: releaseAdapterWhenIdle,
 	}
 }
 
